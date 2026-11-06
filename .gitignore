@@ -29,6 +29,8 @@ ENV/
 # Output directories & caches
 output/
 temp/
+tests/output_files/
+tests/sample_files/
 *.tmp
 
 # IDE
