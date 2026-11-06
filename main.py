@@ -37,10 +37,22 @@ def handle_conversion(args, manager):
 
 
 def main():
+    # Si se ejecuta sin argumentos desde Windows (doble clic) o consola sin parámetros, abrir la GUI
+    if len(sys.argv) == 1:
+        try:
+            from ui import run_gui
+            run_gui()
+            return
+        except ImportError as e:
+            print(f"[AVISO] No se pudo iniciar la interfaz gráfica ({e}). Mostrando modo consola.")
+
     parser = argparse.ArgumentParser(
-        description="ArchiveConverter CLI - Convertidor y caja de herramientas de archivos local y privado."
+        description="ArchiveConverter - Convertidor y caja de herramientas de archivos local y privado."
     )
     subparsers = parser.add_subparsers(dest="command", help="Comandos disponibles")
+
+    # Subcomando: gui (para forzar apertura de interfaz)
+    subparsers.add_parser("gui", help="Abrir la interfaz gráfica de escritorio")
 
     # Subcomando: merge
     parser_merge = subparsers.add_parser("merge", help="Unir múltiples archivos PDF en uno solo")
@@ -89,8 +101,11 @@ def main():
     args = parser.parse_args()
     manager = ConverterManager()
 
-    # Si se invoca un subcomando de PDFToolkit
-    if args.command == "merge":
+    if args.command == "gui":
+        from ui import run_gui
+        run_gui()
+        return
+    elif args.command == "merge":
         res = PDFToolkit.merge(args.files, args.output)
         print(f"[OK] {len(args.files)} PDFs unidos con éxito -> {res}")
         return
@@ -125,25 +140,9 @@ def main():
         print(f"[OK] PDF desbloqueado -> {res}")
         return
 
-    # Si se llamó de forma directa o sin argumentos
     if not args.input_file:
-        print("=" * 65)
-        print("  ArchiveConverter Core Engine + PDF Toolkit (Fase 1)")
-        print("  100% Offline | Sin publicidad | Máxima privacidad")
-        print("=" * 65)
-        print("\nConversiones de formato:")
-        print("  python main.py <archivo_origen> <formato_destino>")
-        print("  python main.py documento.pdf docx")
-        print("  python main.py imagen.png webp")
-        print("\nCaja de herramientas PDF:")
-        print("  python main.py merge doc1.pdf doc2.pdf -o final.pdf")
-        print("  python main.py split doc.pdf --range 1-3")
-        print("  python main.py compress doc.pdf")
-        print("  python main.py extract-images doc.pdf")
-        print("  python main.py rotate doc.pdf -d 90")
-        print("  python main.py protect doc.pdf -p 'MiPassword123'")
-        print("  python main.py unlock doc_protegido.pdf -p 'MiPassword123'")
-        print("=" * 65)
+        from ui import run_gui
+        run_gui()
         return
 
     handle_conversion(args, manager)
