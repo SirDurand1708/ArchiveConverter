@@ -194,3 +194,84 @@ class PDFToolkit:
             # Guardar sin encriptación
             doc.save(str(out_p))
         return out_p
+
+    @staticmethod
+    def add_watermark(
+        input_path: str | Path,
+        watermark_text: str,
+        output_path: Optional[str | Path] = None,
+        font_size: int = 38,
+        rotate: int = 45,
+        opacity: float = 0.25
+    ) -> Path:
+        """
+        Añade una marca de agua de texto en diagonal en todas las páginas del PDF.
+        """
+        in_p = Path(input_path).resolve()
+        out_p = Path(output_path).resolve() if output_path else in_p.with_stem(f"{in_p.stem}_marca_agua")
+        out_p.parent.mkdir(parents=True, exist_ok=True)
+
+        with pymupdf.open(str(in_p)) as doc:
+            for page in doc:
+                rect = page.rect
+                # Center-diagonal anchor point
+                p = pymupdf.Point(rect.width * 0.15, rect.height * 0.65)
+                page.insert_text(
+                    p,
+                    watermark_text,
+                    fontsize=font_size,
+                    color=(0.55, 0.55, 0.55),
+                    fill_opacity=opacity,
+                    morph=(p, pymupdf.Matrix(rotate))
+                )
+            doc.save(str(out_p))
+        return out_p
+
+    @staticmethod
+    def add_signature(
+        input_path: str | Path,
+        signature_path: str | Path,
+        page_num: int = -1,
+        position: str = "bottom-right",
+        width: int = 150,
+        height: int = 65,
+        output_path: Optional[str | Path] = None
+    ) -> Path:
+        """
+        Estampa una imagen de firma o sello sobre una página específica del PDF.
+        - page_num: número de página (1-based, o -1 para la última página).
+        - position: 'bottom-right', 'bottom-left', 'center'.
+        """
+        in_p = Path(input_path).resolve()
+        sig_p = Path(signature_path).resolve()
+        if not sig_p.exists():
+            raise FileNotFoundError(f"Archivo de firma no encontrado: {sig_p}")
+
+        out_p = Path(output_path).resolve() if output_path else in_p.with_stem(f"{in_p.stem}_firmado")
+        out_p.parent.mkdir(parents=True, exist_ok=True)
+
+        with pymupdf.open(str(in_p)) as doc:
+            total = len(doc)
+            target_idx = (total - 1) if page_num == -1 else (page_num - 1)
+            if target_idx < 0 or target_idx >= total:
+                raise ValueError(f"Página inválida: {page_num}. El documento tiene {total} páginas.")
+
+            page = doc[target_idx]
+            rect = page.rect
+
+            margin = 35
+            if position == "bottom-right":
+                x0 = rect.width - width - margin
+                y0 = rect.height - height - margin
+            elif position == "bottom-left":
+                x0 = margin
+                y0 = rect.height - height - margin
+            else:  # center
+                x0 = (rect.width - width) / 2
+                y0 = (rect.height - height) / 2
+
+            sig_rect = pymupdf.Rect(x0, y0, x0 + width, y0 + height)
+            page.insert_image(sig_rect, filename=str(sig_p), overlay=True)
+            doc.save(str(out_p))
+
+        return out_p

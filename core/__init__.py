@@ -4,6 +4,7 @@ from .image_converter import ImageConverter
 from .document_converter import DocumentConverter
 from .manager import ConverterManager
 from .pdf_tools import PDFToolkit
+from .bg_remover import BackgroundRemover
 
 __all__ = [
     "BaseConverter",
@@ -12,4 +13,5 @@ __all__ = [
     "DocumentConverter",
     "ConverterManager",
     "PDFToolkit",
+    "BackgroundRemover",
 ]

@@ -1,10 +1,12 @@
 import os
 import subprocess
+import base64
+import tempfile
 from pathlib import Path
 from typing import List, Optional, Dict, Any
 import webview
 
-from core import ConverterManager, PDFToolkit
+from core import ConverterManager, PDFToolkit, BackgroundRemover
 
 
 class DesktopAPI:
@@ -31,6 +33,7 @@ class DesktopAPI:
 
     def _file_info(self, file_path: Path) -> Dict[str, Any]:
         targets = self.manager.get_supported_target_formats(file_path)
+        is_image = file_path.suffix.lower() in BackgroundRemover.SUPPORTED_INPUTS
         return {
             "name": file_path.name,
             "path": str(file_path.resolve()),
@@ -38,7 +41,36 @@ class DesktopAPI:
             "size_bytes": file_path.stat().st_size,
             "extension": file_path.suffix.lower().lstrip("."),
             "supported_targets": targets,
+            "is_image": is_image,
         }
+
+    # ================= Carga y Drag & Drop =================
+
+    def load_file_from_path(self, path_str: str) -> Optional[Dict[str, Any]]:
+        """Carga los metadatos de un archivo soltado con ruta local."""
+        p = Path(path_str)
+        if p.exists() and p.is_file():
+            return self._file_info(p)
+        return None
+
+    def load_dropped_base64(self, filename: str, data_url: str) -> Optional[Dict[str, Any]]:
+        """Carga un archivo soltado cuando el navegador envía los bytes en Base64."""
+        try:
+            if "," in data_url:
+                _, encoded = data_url.split(",", 1)
+            else:
+                encoded = data_url
+            file_bytes = base64.b64decode(encoded)
+
+            temp_dir = Path(tempfile.gettempdir()) / "ArchiveConverter"
+            temp_dir.mkdir(parents=True, exist_ok=True)
+            temp_file = temp_dir / filename
+            temp_file.write_bytes(file_bytes)
+
+            return self._file_info(temp_file)
+        except Exception as e:
+            print(f"[ERROR] Error al procesar archivo arrastrado: {e}")
+            return None
 
     # ================= Dialogs =================
 
@@ -50,6 +82,21 @@ class DesktopAPI:
             dialog_type=webview.OPEN_DIALOG,
             allow_multiple=False,
             file_types=("Archivos soportados (*.pdf;*.docx;*.png;*.jpg;*.jpeg;*.webp;*.ico)", "Todos los archivos (*.*)")
+        )
+        if result and len(result) > 0:
+            p = Path(result[0])
+            if p.exists():
+                return self._file_info(p)
+        return None
+
+    def select_image_file(self) -> Optional[Dict[str, Any]]:
+        """Abre el diálogo para seleccionar específicamente una imagen o firma."""
+        if not self._window:
+            return None
+        result = self._window.create_file_dialog(
+            dialog_type=webview.OPEN_DIALOG,
+            allow_multiple=False,
+            file_types=("Imágenes (*.png;*.jpg;*.jpeg;*.webp)", "Todos los archivos (*.*)")
         )
         if result and len(result) > 0:
             p = Path(result[0])
@@ -115,6 +162,25 @@ class DesktopAPI:
             "error_message": result.error_message
         }
 
+    # ================= Removedor de Fondos (IA) =================
+
+    def remove_image_bg(self, file_path: str, output_dir: Optional[str] = None) -> Dict[str, Any]:
+        """Elimina el fondo de una imagen usando IA en local."""
+        try:
+            in_p = Path(file_path)
+            out_target = None
+            if output_dir:
+                out_target = Path(output_dir) / f"{in_p.stem}_sin_fondo.png"
+
+            res = BackgroundRemover.remove_background(in_p, out_target)
+            return {
+                "success": True,
+                "output_path": str(res),
+                "filename": res.name
+            }
+        except Exception as e:
+            return {"success": False, "error_message": str(e)}
+
     # ================= Caja de Herramientas PDF =================
 
     def pdf_merge(self, file_paths: List[str], output_dir: Optional[str] = None) -> Dict[str, Any]:
@@ -123,7 +189,6 @@ class DesktopAPI:
             dest_dir = Path(output_dir) if output_dir else paths[0].parent
             dest_file = dest_dir / "documentos_unidos.pdf"
             
-            # Avoid overwrite collision
             counter = 1
             while dest_file.exists():
                 dest_file = dest_dir / f"documentos_unidos_{counter}.pdf"
@@ -203,6 +268,33 @@ class DesktopAPI:
     def pdf_unlock(self, file_path: str, password: str) -> Dict[str, Any]:
         try:
             res = PDFToolkit.unlock(Path(file_path), password=password)
+            return {"success": True, "output_path": str(res), "filename": res.name}
+        except Exception as e:
+            return {"success": False, "error_message": str(e)}
+
+    def pdf_watermark(self, file_path: str, text: str) -> Dict[str, Any]:
+        """Añade marca de agua diagonal con opacidad suave a un PDF."""
+        try:
+            res = PDFToolkit.add_watermark(Path(file_path), watermark_text=text)
+            return {"success": True, "output_path": str(res), "filename": res.name}
+        except Exception as e:
+            return {"success": False, "error_message": str(e)}
+
+    def pdf_sign(
+        self,
+        file_path: str,
+        signature_path: str,
+        position: str = "bottom-right",
+        page_num: int = -1
+    ) -> Dict[str, Any]:
+        """Estampa imagen de firma o sello sobre un PDF."""
+        try:
+            res = PDFToolkit.add_signature(
+                input_path=Path(file_path),
+                signature_path=Path(signature_path),
+                position=position,
+                page_num=page_num
+            )
             return {"success": True, "output_path": str(res), "filename": res.name}
         except Exception as e:
             return {"success": False, "error_message": str(e)}
