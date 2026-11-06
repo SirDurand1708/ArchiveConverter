@@ -1,42 +1,15 @@
 import sys
 import argparse
 from pathlib import Path
-from core import ConverterManager
+from core import ConverterManager, PDFToolkit
 
 
-def main():
-    parser = argparse.ArgumentParser(
-        description="ArchiveConverter CLI - Convertidor de archivos local, seguro y de alta fidelidad."
-    )
-    parser.add_argument("input_file", nargs="?", help="Ruta del archivo a convertir")
-    parser.add_argument("target_format", nargs="?", help="Formato de destino (ej: docx, pdf, png, webp)")
-    parser.add_argument("-o", "--output", help="Ruta o nombre del archivo de salida (opcional)")
-
-    args = parser.parse_args()
-    manager = ConverterManager()
-
-    # Si no se pasan argumentos, mostrar ayuda interactiva y estado del sistema
-    if not args.input_file:
-        print("=" * 60)
-        print("  ArchiveConverter Core Engine (Fase 1)")
-        print("  100% Offline | Sin publicidad | Máxima privacidad")
-        print("=" * 60)
-        print("\nUso rápido:")
-        print("  python main.py <archivo_origen> <formato_destino>")
-        print("\nEjemplos:")
-        print("  python main.py documento.pdf docx")
-        print("  python main.py contrato.docx pdf")
-        print("  python main.py foto.png webp")
-        print("  python main.py reporte.pdf png")
-        print("=" * 60)
-        return
-
+def handle_conversion(args, manager):
     input_path = Path(args.input_file)
     if not input_path.exists():
         print(f"\n[ERROR] El archivo no fue encontrado: {input_path}")
         sys.exit(1)
 
-    # Si se pasa el archivo pero no el formato de destino, listar los formatos soportados
     if not args.target_format:
         available = manager.get_supported_target_formats(input_path)
         print(f"\nArchivo: {input_path.name}")
@@ -61,6 +34,119 @@ def main():
         print(f"[FALLO] Error en la conversión ({result.elapsed_seconds}s):")
         print(f"        {result.error_message}")
         sys.exit(1)
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="ArchiveConverter CLI - Convertidor y caja de herramientas de archivos local y privado."
+    )
+    subparsers = parser.add_subparsers(dest="command", help="Comandos disponibles")
+
+    # Subcomando: merge
+    parser_merge = subparsers.add_parser("merge", help="Unir múltiples archivos PDF en uno solo")
+    parser_merge.add_argument("files", nargs="+", help="Rutas de los archivos PDF a unir")
+    parser_merge.add_argument("-o", "--output", default="merged.pdf", help="Ruta del archivo PDF resultante")
+
+    # Subcomando: split
+    parser_split = subparsers.add_parser("split", help="Dividir un PDF en páginas individuales o rango")
+    parser_split.add_argument("file", help="Ruta del archivo PDF a dividir")
+    parser_split.add_argument("-o", "--output-dir", help="Directorio donde guardar las páginas")
+    parser_split.add_argument("--range", help="Rango de páginas (ej: 1-3)")
+
+    # Subcomando: compress
+    parser_compress = subparsers.add_parser("compress", help="Comprimir y optimizar un PDF")
+    parser_compress.add_argument("file", help="Ruta del archivo PDF a comprimir")
+    parser_compress.add_argument("-o", "--output", help="Ruta del PDF comprimido de salida")
+
+    # Subcomando: extract-images
+    parser_extract = subparsers.add_parser("extract-images", help="Extraer imágenes contenidas en un PDF")
+    parser_extract.add_argument("file", help="Ruta del archivo PDF")
+    parser_extract.add_argument("-o", "--output-dir", help="Directorio donde guardar las imágenes extraídas")
+
+    # Subcomando: rotate
+    parser_rotate = subparsers.add_parser("rotate", help="Rotar las páginas de un PDF")
+    parser_rotate.add_argument("file", help="Ruta del archivo PDF")
+    parser_rotate.add_argument("-d", "--degrees", type=int, default=90, help="Grados de rotación (90, 180, 270)")
+    parser_rotate.add_argument("-o", "--output", help="Ruta del PDF rotado de salida")
+
+    # Subcomando: protect
+    parser_protect = subparsers.add_parser("protect", help="Proteger un PDF con contraseña")
+    parser_protect.add_argument("file", help="Ruta del archivo PDF")
+    parser_protect.add_argument("-p", "--password", required=True, help="Contraseña a establecer")
+    parser_protect.add_argument("-o", "--output", help="Ruta del PDF protegido")
+
+    # Subcomando: unlock
+    parser_unlock = subparsers.add_parser("unlock", help="Desbloquear un PDF protegido")
+    parser_unlock.add_argument("file", help="Ruta del archivo PDF protegido")
+    parser_unlock.add_argument("-p", "--password", required=True, help="Contraseña actual del PDF")
+    parser_unlock.add_argument("-o", "--output", help="Ruta del PDF desbloqueado")
+
+    # Argumentos posicionales generales (para conversión directa: python main.py doc.pdf docx)
+    parser.add_argument("input_file", nargs="?", help="Ruta del archivo a convertir")
+    parser.add_argument("target_format", nargs="?", help="Formato de destino (ej: docx, pdf, png, webp)")
+    parser.add_argument("-o", "--output", help="Ruta o nombre del archivo de salida")
+
+    args = parser.parse_args()
+    manager = ConverterManager()
+
+    # Si se invoca un subcomando de PDFToolkit
+    if args.command == "merge":
+        res = PDFToolkit.merge(args.files, args.output)
+        print(f"[OK] {len(args.files)} PDFs unidos con éxito -> {res}")
+        return
+    elif args.command == "split":
+        if args.range:
+            parts = args.range.split("-")
+            from_p, to_p = int(parts[0]), int(parts[1])
+            res = PDFToolkit.split_range(args.file, from_p, to_p, output_path=args.output_dir)
+            print(f"[OK] Rango {args.range} extraído -> {res}")
+        else:
+            files = PDFToolkit.split_all_pages(args.file, output_dir=args.output_dir)
+            print(f"[OK] PDF dividido en {len(files)} páginas en {files[0].parent}")
+        return
+    elif args.command == "compress":
+        res = PDFToolkit.compress(args.file, output_path=args.output)
+        print(f"[OK] PDF optimizado y comprimido -> {res}")
+        return
+    elif args.command == "extract-images":
+        imgs = PDFToolkit.extract_images(args.file, output_dir=args.output_dir)
+        print(f"[OK] Se extrajeron {len(imgs)} imágenes en {args.output_dir or 'carpeta local'}")
+        return
+    elif args.command == "rotate":
+        res = PDFToolkit.rotate_pages(args.file, degrees=args.degrees, output_path=args.output)
+        print(f"[OK] PDF rotado en {args.degrees}° -> {res}")
+        return
+    elif args.command == "protect":
+        res = PDFToolkit.protect(args.file, user_password=args.password, output_path=args.output)
+        print(f"[OK] PDF protegido con cifrado AES-256 -> {res}")
+        return
+    elif args.command == "unlock":
+        res = PDFToolkit.unlock(args.file, password=args.password, output_path=args.output)
+        print(f"[OK] PDF desbloqueado -> {res}")
+        return
+
+    # Si se llamó de forma directa o sin argumentos
+    if not args.input_file:
+        print("=" * 65)
+        print("  ArchiveConverter Core Engine + PDF Toolkit (Fase 1)")
+        print("  100% Offline | Sin publicidad | Máxima privacidad")
+        print("=" * 65)
+        print("\nConversiones de formato:")
+        print("  python main.py <archivo_origen> <formato_destino>")
+        print("  python main.py documento.pdf docx")
+        print("  python main.py imagen.png webp")
+        print("\nCaja de herramientas PDF:")
+        print("  python main.py merge doc1.pdf doc2.pdf -o final.pdf")
+        print("  python main.py split doc.pdf --range 1-3")
+        print("  python main.py compress doc.pdf")
+        print("  python main.py extract-images doc.pdf")
+        print("  python main.py rotate doc.pdf -d 90")
+        print("  python main.py protect doc.pdf -p 'MiPassword123'")
+        print("  python main.py unlock doc_protegido.pdf -p 'MiPassword123'")
+        print("=" * 65)
+        return
+
+    handle_conversion(args, manager)
 
 
 if __name__ == "__main__":

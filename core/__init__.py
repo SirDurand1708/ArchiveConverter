@@ -3,6 +3,7 @@ from .base import BaseConverter, ConversionResult
 from .image_converter import ImageConverter
 from .document_converter import DocumentConverter
 from .manager import ConverterManager
+from .pdf_tools import PDFToolkit
 
 __all__ = [
     "BaseConverter",
@@ -10,4 +11,5 @@ __all__ = [
     "ImageConverter",
     "DocumentConverter",
     "ConverterManager",
+    "PDFToolkit",
 ]
