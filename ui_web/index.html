@@ -1,0 +1,1017 @@
+<!DOCTYPE html>
+<html lang="es" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ArchiveConverter</title>
+  <style>
+    :root {
+      --bg-base: #090d16;
+      --bg-sidebar: #0f172a;
+      --bg-card: #131c31;
+      --bg-card-hover: #17223b;
+      --bg-dropzone: rgba(30, 41, 59, 0.4);
+      --border: rgba(148, 163, 184, 0.12);
+      --border-focus: #3b82f6;
+      --text-main: #f8fafc;
+      --text-muted: #94a3b8;
+      --primary: #2563eb;
+      --primary-hover: #1d4ed8;
+      --primary-glow: rgba(37, 99, 235, 0.25);
+      --success: #10b981;
+      --danger: #ef4444;
+      --card-radius: 14px;
+      --btn-radius: 10px;
+    }
+
+    html.light {
+      --bg-base: #f8fafc;
+      --bg-sidebar: #ffffff;
+      --bg-card: #ffffff;
+      --bg-card-hover: #f1f5f9;
+      --bg-dropzone: rgba(241, 245, 249, 0.6);
+      --border: rgba(15, 23, 42, 0.08);
+      --border-focus: #2563eb;
+      --text-main: #0f172a;
+      --text-muted: #64748b;
+      --primary: #2563eb;
+      --primary-hover: #1d4ed8;
+      --primary-glow: rgba(37, 99, 235, 0.15);
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      user-select: none;
+      -webkit-user-select: none;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI Variable", "Segoe UI", Inter, Roboto, sans-serif;
+    }
+
+    body {
+      background: var(--bg-base);
+      color: var(--text-main);
+      height: 100vh;
+      overflow: hidden;
+      display: flex;
+    }
+
+    /* ================= Sidebar ================= */
+    .sidebar {
+      width: 250px;
+      min-width: 250px;
+      background: var(--bg-sidebar);
+      border-right: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      padding: 24px 16px;
+      justify-content: space-between;
+      transition: all 0.2s ease;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 0 8px 24px 8px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .brand-icon {
+      width: 36px;
+      height: 36px;
+      background: linear-gradient(135deg, #3b82f6, #1d4ed8);
+      border-radius: 10px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: white;
+      box-shadow: 0 4px 12px var(--primary-glow);
+    }
+
+    .brand-text h1 {
+      font-size: 16px;
+      font-weight: 700;
+      letter-spacing: -0.3px;
+    }
+
+    .brand-text span {
+      font-size: 11px;
+      color: var(--text-muted);
+      font-weight: 500;
+    }
+
+    .nav-list {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      margin-top: 20px;
+      flex: 1;
+    }
+
+    .nav-item {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 10px 14px;
+      border-radius: var(--btn-radius);
+      color: var(--text-muted);
+      font-size: 13.5px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.15s ease;
+      background: transparent;
+      border: 1px solid transparent;
+    }
+
+    .nav-item svg {
+      width: 18px;
+      height: 18px;
+      stroke-width: 2;
+    }
+
+    .nav-item:hover {
+      background: var(--bg-card-hover);
+      color: var(--text-main);
+    }
+
+    .nav-item.active {
+      background: var(--primary);
+      color: #ffffff;
+      box-shadow: 0 4px 14px var(--primary-glow);
+    }
+
+    .sidebar-footer {
+      border-top: 1px solid var(--border);
+      padding-top: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .theme-toggle-btn {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 8px 12px;
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--btn-radius);
+      color: var(--text-muted);
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+
+    .theme-toggle-btn:hover {
+      background: var(--bg-card-hover);
+      color: var(--text-main);
+    }
+
+    /* ================= Main Content Area ================= */
+    .main-viewport {
+      flex: 1;
+      height: 100vh;
+      overflow-y: auto;
+      padding: 32px 40px;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .tab-content {
+      display: none;
+      flex-direction: column;
+      gap: 20px;
+      animation: fadeIn 0.25s ease-out;
+      max-width: 860px;
+      width: 100%;
+      margin: 0 auto;
+    }
+
+    .tab-content.active {
+      display: flex;
+    }
+
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(6px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    /* ================= Headers ================= */
+    .view-header {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      margin-bottom: 8px;
+    }
+
+    .view-header h2 {
+      font-size: 24px;
+      font-weight: 700;
+      letter-spacing: -0.5px;
+    }
+
+    .view-header p {
+      font-size: 13.5px;
+      color: var(--text-muted);
+    }
+
+    /* ================= DropZone ================= */
+    .dropzone {
+      border: 2px dashed var(--border);
+      background: var(--bg-dropzone);
+      border-radius: var(--card-radius);
+      padding: 36px 20px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      position: relative;
+    }
+
+    .dropzone:hover, .dropzone.dragover {
+      border-color: var(--primary);
+      background: rgba(37, 99, 235, 0.08);
+      transform: scale(0.995);
+    }
+
+    .dropzone-icon {
+      width: 48px;
+      height: 48px;
+      border-radius: 12px;
+      background: rgba(59, 130, 246, 0.12);
+      color: #3b82f6;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin-bottom: 14px;
+    }
+
+    .dropzone-icon svg {
+      width: 24px;
+      height: 24px;
+      stroke-width: 2;
+    }
+
+    .dropzone h3 {
+      font-size: 15px;
+      font-weight: 600;
+      margin-bottom: 4px;
+    }
+
+    .dropzone p {
+      font-size: 12.5px;
+      color: var(--text-muted);
+      margin-bottom: 16px;
+    }
+
+    .btn-browse {
+      background: var(--primary);
+      color: white;
+      border: none;
+      padding: 9px 20px;
+      border-radius: var(--btn-radius);
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      box-shadow: 0 4px 12px var(--primary-glow);
+      transition: all 0.15s ease;
+    }
+
+    .btn-browse:hover {
+      background: var(--primary-hover);
+    }
+
+    /* ================= File Card & Options ================= */
+    .card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--card-radius);
+      padding: 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
+    }
+
+    .file-pill {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 12px 16px;
+      background: var(--bg-dropzone);
+      border-radius: 10px;
+      border: 1px solid var(--border);
+    }
+
+    .file-pill-left {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      overflow: hidden;
+    }
+
+    .file-badge {
+      padding: 4px 8px;
+      border-radius: 6px;
+      font-size: 11px;
+      font-weight: 800;
+      text-transform: uppercase;
+      background: #3b82f6;
+      color: white;
+      letter-spacing: 0.5px;
+    }
+
+    .file-name {
+      font-size: 14px;
+      font-weight: 600;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      max-width: 400px;
+    }
+
+    .file-size {
+      font-size: 12px;
+      color: var(--text-muted);
+      font-weight: 500;
+    }
+
+    .options-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+      align-items: center;
+    }
+
+    .field-group {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .field-label {
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    select, input[type="text"], input[type="password"] {
+      width: 100%;
+      background: var(--bg-base);
+      border: 1px solid var(--border);
+      color: var(--text-main);
+      padding: 10px 14px;
+      border-radius: 8px;
+      font-size: 13.5px;
+      outline: none;
+      transition: border 0.15s ease;
+    }
+
+    select:focus, input:focus {
+      border-color: var(--border-focus);
+    }
+
+    .btn-action-primary {
+      width: 100%;
+      background: linear-gradient(135deg, #3b82f6, #1d4ed8);
+      color: white;
+      border: none;
+      padding: 13px;
+      border-radius: var(--btn-radius);
+      font-size: 14.5px;
+      font-weight: 700;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      transition: all 0.15s ease;
+      box-shadow: 0 4px 16px var(--primary-glow);
+    }
+
+    .btn-action-primary:hover:not(:disabled) {
+      filter: brightness(1.1);
+      transform: translateY(-1px);
+    }
+
+    .btn-action-primary:disabled {
+      opacity: 0.45;
+      cursor: not-allowed;
+      filter: none;
+      transform: none;
+    }
+
+    /* ================= Status / Result Banner ================= */
+    .status-banner {
+      display: none;
+      padding: 14px 18px;
+      border-radius: 10px;
+      font-size: 13.5px;
+      font-weight: 500;
+      align-items: center;
+      justify-content: space-between;
+      animation: fadeIn 0.2s ease;
+    }
+
+    .status-banner.success {
+      display: flex;
+      background: rgba(16, 185, 129, 0.12);
+      border: 1px solid rgba(16, 185, 129, 0.3);
+      color: #10b981;
+    }
+
+    .status-banner.error {
+      display: flex;
+      background: rgba(239, 68, 68, 0.12);
+      border: 1px solid rgba(239, 68, 68, 0.3);
+      color: #ef4444;
+    }
+
+    .status-actions {
+      display: flex;
+      gap: 8px;
+    }
+
+    .btn-secondary {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      color: var(--text-main);
+      padding: 7px 14px;
+      border-radius: 6px;
+      font-size: 12.5px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+
+    .btn-secondary:hover {
+      background: var(--bg-card-hover);
+    }
+
+    /* ================= PDF Tools Submenu ================= */
+    .tools-nav {
+      display: flex;
+      gap: 6px;
+      overflow-x: auto;
+      padding-bottom: 4px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .tool-tab-btn {
+      padding: 8px 14px;
+      border-radius: 8px;
+      background: transparent;
+      border: none;
+      color: var(--text-muted);
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      white-space: nowrap;
+      transition: all 0.15s ease;
+    }
+
+    .tool-tab-btn:hover {
+      color: var(--text-main);
+      background: var(--bg-card-hover);
+    }
+
+    .tool-tab-btn.active {
+      background: var(--bg-card);
+      color: var(--primary);
+      box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+    }
+
+    .tool-panel {
+      display: none;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    .tool-panel.active {
+      display: flex;
+    }
+
+    /* Loader */
+    .spinner {
+      width: 18px;
+      height: 18px;
+      border: 2px solid rgba(255, 255, 255, 0.3);
+      border-top-color: white;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- ================= Sidebar ================= -->
+  <aside class="sidebar">
+    <div>
+      <div class="brand">
+        <div class="brand-icon">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon>
+          </svg>
+        </div>
+        <div class="brand-text">
+          <h1>ArchiveConverter</h1>
+          <span>100% Offline & Privado</span>
+        </div>
+      </div>
+
+      <nav class="nav-list">
+        <button class="nav-item active" onclick="switchNav('converter')">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.93a2 2 0 0 1-1.66-.9l-.82-1.2A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13c0 1.1.9 2 2 2Z"/></svg>
+          Convertidor
+        </button>
+        <button class="nav-item" onclick="switchNav('pdf-tools')">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>
+          Herramientas PDF
+        </button>
+        <button class="nav-item" onclick="switchNav('about')">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>
+          Acerca de
+        </button>
+      </nav>
+    </div>
+
+    <div class="sidebar-footer">
+      <button class="theme-toggle-btn" onclick="toggleTheme()">
+        <span id="theme-label">🌙 Modo Oscuro</span>
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/></svg>
+      </button>
+    </div>
+  </aside>
+
+  <!-- ================= Main Content ================= -->
+  <main class="main-viewport">
+
+    <!-- TAB 1: CONVERTIDOR UNIVERSAL -->
+    <section id="tab-converter" class="tab-content active">
+      <div class="view-header">
+        <h2>Convertidor Universal</h2>
+        <p>Convierte documentos e imágenes de forma local y sin subir datos a servidores.</p>
+      </div>
+
+      <!-- Dropzone -->
+      <div class="dropzone" id="conv-dropzone" onclick="onSelectConvertFile()">
+        <div class="dropzone-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+        </div>
+        <h3>Arrastra tu archivo aquí para convertir</h3>
+        <p>Soporta PDF, DOCX, PNG, JPG, WEBP, ICO y más</p>
+        <button class="btn-browse" type="button">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+          Seleccionar archivo
+        </button>
+      </div>
+
+      <!-- Options Card -->
+      <div class="card" id="conv-card" style="display: none;">
+        <div class="file-pill">
+          <div class="file-pill-left">
+            <span class="file-badge" id="conv-badge">PDF</span>
+            <div>
+              <div class="file-name" id="conv-filename">documento.pdf</div>
+              <div class="file-size" id="conv-filesize">2.4 MB</div>
+            </div>
+          </div>
+          <button class="btn-secondary" onclick="onSelectConvertFile()">Cambiar archivo</button>
+        </div>
+
+        <div class="options-grid">
+          <div class="field-group">
+            <label class="field-label">Convertir a:</label>
+            <select id="conv-format-select"></select>
+          </div>
+          <div class="field-group">
+            <label class="field-label">Guardar en:</label>
+            <button class="btn-secondary" id="conv-folder-btn" onclick="onChooseFolder()" style="height: 42px; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+              📁 Misma carpeta que el archivo
+            </button>
+          </div>
+        </div>
+
+        <button class="btn-action-primary" id="conv-start-btn" onclick="onStartConversion()">
+          <span id="conv-btn-text">⚡ Iniciar Conversión</span>
+        </button>
+      </div>
+
+      <!-- Result Banner -->
+      <div class="status-banner" id="conv-status">
+        <span id="conv-status-text">¡Conversión exitosa!</span>
+        <div class="status-actions">
+          <button class="btn-secondary" onclick="openResultFile()">Abrir archivo</button>
+          <button class="btn-secondary" onclick="openResultFolder()">Abrir carpeta</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- TAB 2: HERRAMIENTAS PDF -->
+    <section id="tab-pdf-tools" class="tab-content">
+      <div class="view-header">
+        <h2>Caja de Herramientas PDF</h2>
+        <p>Optimiza, divide, une y cifra tus documentos sin límites de tamaño.</p>
+      </div>
+
+      <div class="tools-nav">
+        <button class="tool-tab-btn active" onclick="switchTool('merge')">🔗 Unir</button>
+        <button class="tool-tab-btn" onclick="switchTool('split')">✂️ Dividir</button>
+        <button class="tool-tab-btn" onclick="switchTool('compress')">🗜️ Comprimir</button>
+        <button class="tool-tab-btn" onclick="switchTool('extract')">🖼️ Extraer Fotos</button>
+        <button class="tool-tab-btn" onclick="switchTool('rotate')">🔄 Rotar</button>
+        <button class="tool-tab-btn" onclick="switchTool('security')">🔒 Seguridad</button>
+      </div>
+
+      <!-- MERGE -->
+      <div class="tool-panel active" id="tool-merge">
+        <div class="dropzone" onclick="onSelectMergeFiles()">
+          <div class="dropzone-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg></div>
+          <h3>Selecciona dos o más PDFs para unirlos</h3>
+          <p id="merge-count-label">Ningún archivo seleccionado</p>
+          <button class="btn-browse" type="button">Buscar archivos PDF</button>
+        </div>
+        <button class="btn-action-primary" id="merge-btn" disabled onclick="onExecuteMerge()">Combinar PDFs</button>
+      </div>
+
+      <!-- SPLIT -->
+      <div class="tool-panel" id="tool-split">
+        <div class="dropzone" onclick="onSelectToolFile('split')">
+          <div class="dropzone-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><line x1="20" y1="4" x2="8.12" y2="15.88"/><line x1="14.47" y1="14.48" x2="20" y2="20"/><line x1="8.12" y1="8.12" x2="12" y2="12"/></svg></div>
+          <h3>Selecciona el PDF a dividir</h3>
+          <p id="split-file-label">Ningún archivo seleccionado</p>
+          <button class="btn-browse" type="button">Seleccionar PDF</button>
+        </div>
+        <div class="card" id="split-card" style="display: none;">
+          <div class="field-group">
+            <label class="field-label">Modo de división:</label>
+            <select id="split-mode-select" onchange="toggleSplitRange()">
+              <option value="all">Dividir en páginas individuales (1 archivo por página)</option>
+              <option value="range">Extraer rango específico (ej: 1-3)</option>
+            </select>
+          </div>
+          <div class="field-group" id="split-range-group" style="display: none;">
+            <label class="field-label">Rango de páginas:</label>
+            <input type="text" id="split-range-input" placeholder="ej: 1-3">
+          </div>
+          <button class="btn-action-primary" onclick="onExecuteSplit()">Ejecutar División</button>
+        </div>
+      </div>
+
+      <!-- COMPRESS -->
+      <div class="tool-panel" id="tool-compress">
+        <div class="dropzone" onclick="onSelectToolFile('compress')">
+          <div class="dropzone-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M4 14h6v6"/><path d="M20 10h-6V4"/><path d="M14 10l7-7"/><path d="M3 21l7-7"/></svg></div>
+          <h3>Selecciona el PDF a comprimir</h3>
+          <p id="compress-file-label">Reduce el tamaño optimizando flujos de datos sin pérdida visual</p>
+          <button class="btn-browse" type="button">Seleccionar PDF</button>
+        </div>
+        <button class="btn-action-primary" id="compress-btn" disabled onclick="onExecuteCompress()">Comprimir y Optimizar</button>
+      </div>
+
+      <!-- EXTRACT -->
+      <div class="tool-panel" id="tool-extract">
+        <div class="dropzone" onclick="onSelectToolFile('extract')">
+          <div class="dropzone-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><rect width="18" height="18" x="3" y="3" rx="2" ry="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"/></svg></div>
+          <h3>Selecciona el PDF para extraer imágenes</h3>
+          <p id="extract-file-label">Exporta todas las fotos a una carpeta en formato nativo</p>
+          <button class="btn-browse" type="button">Seleccionar PDF</button>
+        </div>
+        <button class="btn-action-primary" id="extract-btn" disabled onclick="onExecuteExtract()">Extraer Todas las Fotos</button>
+      </div>
+
+      <!-- ROTATE -->
+      <div class="tool-panel" id="tool-rotate">
+        <div class="dropzone" onclick="onSelectToolFile('rotate')">
+          <div class="dropzone-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/></svg></div>
+          <h3>Selecciona el PDF a rotar</h3>
+          <p id="rotate-file-label">Corrige la orientación de tus documentos</p>
+          <button class="btn-browse" type="button">Seleccionar PDF</button>
+        </div>
+        <div class="card" id="rotate-card" style="display: none;">
+          <div class="field-group">
+            <label class="field-label">Ángulo de rotación:</label>
+            <select id="rotate-deg-select">
+              <option value="90">90° en sentido horario</option>
+              <option value="180">180° invertido</option>
+              <option value="270">270° antihorario</option>
+            </select>
+          </div>
+          <button class="btn-action-primary" onclick="onExecuteRotate()">Rotar Documento</button>
+        </div>
+      </div>
+
+      <!-- SECURITY -->
+      <div class="tool-panel" id="tool-security">
+        <div class="dropzone" onclick="onSelectToolFile('sec')">
+          <div class="dropzone-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><rect width="18" height="11" x="3" y="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg></div>
+          <h3>Selecciona el PDF para Proteger o Desbloquear</h3>
+          <p id="sec-file-label">Cifrado de grado militar AES-256</p>
+          <button class="btn-browse" type="button">Seleccionar PDF</button>
+        </div>
+        <div class="card" id="sec-card" style="display: none;">
+          <div class="field-group">
+            <label class="field-label">Contraseña:</label>
+            <input type="password" id="sec-pwd-input" placeholder="Ingresa la contraseña">
+          </div>
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+            <button class="btn-action-primary" onclick="onExecuteProtect()">🔒 Proteger PDF</button>
+            <button class="btn-secondary" style="height: 44px; font-size: 14px;" onclick="onExecuteUnlock()">🔓 Desbloquear</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- PDF Tools Result Banner -->
+      <div class="status-banner" id="tools-status">
+        <span id="tools-status-text">Operación completada</span>
+        <div class="status-actions">
+          <button class="btn-secondary" onclick="openToolResult()">Abrir resultado</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- TAB 3: ACERCA DE -->
+    <section id="tab-about" class="tab-content">
+      <div class="view-header">
+        <h2>Acerca de ArchiveConverter</h2>
+        <p>Software libre, transparente y centrado en la privacidad.</p>
+      </div>
+
+      <div class="card" style="align-items: center; text-align: center; padding: 40px 24px;">
+        <div class="brand-icon" style="width: 56px; height: 56px; border-radius: 16px; margin-bottom: 8px;">
+          <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg>
+        </div>
+        <h3 style="font-size: 20px; font-weight: 700;">ArchiveConverter Desktop</h3>
+        <p style="font-size: 13px; color: var(--text-muted); margin-bottom: 20px;">Versión 1.0.0 Open Source</p>
+
+        <p style="font-size: 14px; max-width: 540px; line-height: 1.6; color: var(--text-muted); margin-bottom: 28px;">
+          Creado para resolver el problema de las páginas web que recopilan documentos personales, 
+          insertan publicidad invasiva o cobran suscripciones por herramientas básicas.<br><br>
+          ✨ <strong>100% Offline:</strong> Nada sale de tu máquina.<br>
+          ✨ <strong>Sin límites:</strong> Convierte archivos de cualquier tamaño.<br>
+          ✨ <strong>Calidad nativa:</strong> Reconstrucción semántica de documentos.
+        </p>
+
+        <button class="btn-browse" onclick="window.open('https://github.com')">
+          Visitar repositorio en GitHub
+        </button>
+      </div>
+    </section>
+
+  </main>
+
+  <script>
+    // State
+    let currentConvertFile = null;
+    let chosenOutputFolder = null;
+    let lastResultPath = null;
+    let lastResultIsFolder = false;
+
+    let selectedMergeFiles = [];
+    let selectedToolFile = null;
+    let lastToolResultPath = null;
+
+    // Navigation
+    function switchNav(tabName) {
+      document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
+      document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
+
+      if (tabName === 'converter') {
+        document.querySelectorAll('.nav-item')[0].classList.add('active');
+        document.getElementById('tab-converter').classList.add('active');
+      } else if (tabName === 'pdf-tools') {
+        document.querySelectorAll('.nav-item')[1].classList.add('active');
+        document.getElementById('tab-pdf-tools').classList.add('active');
+      } else if (tabName === 'about') {
+        document.querySelectorAll('.nav-item')[2].classList.add('active');
+        document.getElementById('tab-about').classList.add('active');
+      }
+    }
+
+    // Tools sub-navigation
+    function switchTool(toolName) {
+      document.querySelectorAll('.tool-tab-btn').forEach(b => b.classList.remove('active'));
+      document.querySelectorAll('.tool-panel').forEach(p => p.classList.remove('active'));
+      event.target.classList.add('active');
+      document.getElementById('tool-' + toolName).classList.add('active');
+    }
+
+    // Theme toggle
+    function toggleTheme() {
+      const isDark = document.documentElement.classList.toggle('dark');
+      document.documentElement.classList.toggle('light', !isDark);
+      document.getElementById('theme-label').textContent = isDark ? '🌙 Modo Oscuro' : '☀️ Modo Claro';
+    }
+
+    // ================= Convertidor Universal =================
+    async function onSelectConvertFile() {
+      try {
+        const file = await window.pywebview.api.select_file();
+        if (file) {
+          currentConvertFile = file;
+          document.getElementById('conv-dropzone').style.display = 'none';
+          document.getElementById('conv-card').style.display = 'flex';
+          document.getElementById('conv-filename').textContent = file.name;
+          document.getElementById('conv-filesize').textContent = file.size;
+          document.getElementById('conv-badge').textContent = file.extension;
+
+          const select = document.getElementById('conv-format-select');
+          select.innerHTML = '';
+          if (file.supported_targets && file.supported_targets.length > 0) {
+            file.supported_targets.forEach(tgt => {
+              const opt = document.createElement('option');
+              opt.value = tgt;
+              opt.textContent = tgt.toUpperCase();
+              select.appendChild(opt);
+            });
+            document.getElementById('conv-start-btn').disabled = false;
+          } else {
+            const opt = document.createElement('option');
+            opt.textContent = 'Sin formatos compatibles';
+            select.appendChild(opt);
+            document.getElementById('conv-start-btn').disabled = true;
+          }
+          hideStatus('conv-status');
+        }
+      } catch (err) {
+        console.error(err);
+      }
+    }
+
+    async function onChooseFolder() {
+      try {
+        const folder = await window.pywebview.api.select_folder();
+        if (folder) {
+          chosenOutputFolder = folder;
+          document.getElementById('conv-folder-btn').textContent = '📁 ' + folder;
+        }
+      } catch (err) {
+        console.error(err);
+      }
+    }
+
+    async function onStartConversion() {
+      if (!currentConvertFile) return;
+      const targetFmt = document.getElementById('conv-format-select').value;
+      const btn = document.getElementById('conv-start-btn');
+      const textSpan = document.getElementById('conv-btn-text');
+
+      btn.disabled = true;
+      textSpan.innerHTML = '<div class="spinner"></div> Convirtiendo...';
+      hideStatus('conv-status');
+
+      try {
+        const res = await window.pywebview.api.convert_file(
+          currentConvertFile.path,
+          targetFmt,
+          chosenOutputFolder
+        );
+
+        if (res.success) {
+          lastResultPath = res.output_path;
+          lastResultIsFolder = false;
+          showStatus('conv-status', `✔ ¡Conversión exitosa en ${res.elapsed_seconds}s! (${res.filename})`, 'success');
+        } else {
+          showStatus('conv-status', `✖ Error: ${res.error_message}`, 'error');
+        }
+      } catch (err) {
+        showStatus('conv-status', `✖ Error inesperado: ${err}`, 'error');
+      } finally {
+        btn.disabled = false;
+        textSpan.textContent = '⚡ Iniciar Conversión';
+      }
+    }
+
+    function openResultFile() {
+      if (lastResultPath) window.pywebview.api.open_file(lastResultPath);
+    }
+
+    function openResultFolder() {
+      if (lastResultPath) window.pywebview.api.open_folder(lastResultPath);
+    }
+
+    // ================= Herramientas PDF =================
+    async function onSelectMergeFiles() {
+      const files = await window.pywebview.api.select_multiple_files();
+      if (files && files.length >= 2) {
+        selectedMergeFiles = files;
+        document.getElementById('merge-count-label').textContent = `${files.length} archivos seleccionados para unir`;
+        document.getElementById('merge-btn').disabled = false;
+      }
+    }
+
+    async function onExecuteMerge() {
+      const paths = selectedMergeFiles.map(f => f.path);
+      const res = await window.pywebview.api.pdf_merge(paths);
+      handleToolResult(res, '¡Archivos PDF unidos exitosamente!');
+    }
+
+    async function onSelectToolFile(tool) {
+      const file = await window.pywebview.api.select_file();
+      if (file) {
+        selectedToolFile = file;
+        if (tool === 'split') {
+          document.getElementById('split-file-label').textContent = file.name;
+          document.getElementById('split-card').style.display = 'flex';
+        } else if (tool === 'compress') {
+          document.getElementById('compress-file-label').textContent = `${file.name} (${file.size})`;
+          document.getElementById('compress-btn').disabled = false;
+        } else if (tool === 'extract') {
+          document.getElementById('extract-file-label').textContent = file.name;
+          document.getElementById('extract-btn').disabled = false;
+        } else if (tool === 'rotate') {
+          document.getElementById('rotate-file-label').textContent = file.name;
+          document.getElementById('rotate-card').style.display = 'flex';
+        } else if (tool === 'sec') {
+          document.getElementById('sec-file-label').textContent = file.name;
+          document.getElementById('sec-card').style.display = 'flex';
+        }
+      }
+    }
+
+    function toggleSplitRange() {
+      const isRange = document.getElementById('split-mode-select').value === 'range';
+      document.getElementById('split-range-group').style.display = isRange ? 'flex' : 'none';
+    }
+
+    async function onExecuteSplit() {
+      const mode = document.getElementById('split-mode-select').value;
+      const range = document.getElementById('split-range-input').value;
+      const res = await window.pywebview.api.pdf_split(selectedToolFile.path, mode, range);
+      handleToolResult(res, '¡PDF dividido exitosamente!');
+    }
+
+    async function onExecuteCompress() {
+      const res = await window.pywebview.api.pdf_compress(selectedToolFile.path);
+      if (res.success) {
+        handleToolResult(res, `¡Comprimido! Reducción: ${res.reduction_percent}% (${res.old_size} -> ${res.new_size})`);
+      } else {
+        handleToolResult(res);
+      }
+    }
+
+    async function onExecuteExtract() {
+      const res = await window.pywebview.api.pdf_extract_images(selectedToolFile.path);
+      handleToolResult(res, `¡Se extrajeron ${res.count} imágenes con éxito!`);
+    }
+
+    async function onExecuteRotate() {
+      const deg = parseInt(document.getElementById('rotate-deg-select').value);
+      const res = await window.pywebview.api.pdf_rotate(selectedToolFile.path, deg);
+      handleToolResult(res, `¡Documento rotado ${deg}° exitosamente!`);
+    }
+
+    async function onExecuteProtect() {
+      const pwd = document.getElementById('sec-pwd-input').value;
+      if (!pwd) return alert('Por favor ingresa una contraseña');
+      const res = await window.pywebview.api.pdf_protect(selectedToolFile.path, pwd);
+      handleToolResult(res, '¡PDF protegido con cifrado AES-256!');
+    }
+
+    async function onExecuteUnlock() {
+      const pwd = document.getElementById('sec-pwd-input').value;
+      if (!pwd) return alert('Ingresa la contraseña para desbloquear');
+      const res = await window.pywebview.api.pdf_unlock(selectedToolFile.path, pwd);
+      handleToolResult(res, '¡PDF desbloqueado exitosamente!');
+    }
+
+    function handleToolResult(res, successMsg = 'Operación completada') {
+      if (res.success) {
+        lastToolResultPath = res.output_path;
+        showStatus('tools-status', `✔ ${successMsg}`, 'success');
+      } else {
+        showStatus('tools-status', `✖ Error: ${res.error_message}`, 'error');
+      }
+    }
+
+    function openToolResult() {
+      if (lastToolResultPath) window.pywebview.api.open_file(lastToolResultPath);
+    }
+
+    function showStatus(id, msg, type) {
+      const el = document.getElementById(id);
+      el.className = 'status-banner ' + type;
+      el.querySelector('span').textContent = msg;
+      el.style.display = 'flex';
+    }
+
+    function hideStatus(id) {
+      document.getElementById(id).style.display = 'none';
+    }
+  </script>
+</body>
+</html>

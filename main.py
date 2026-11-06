@@ -37,22 +37,29 @@ def handle_conversion(args, manager):
 
 
 def main():
-    # Si se ejecuta sin argumentos desde Windows (doble clic) o consola sin parámetros, abrir la GUI
+    # Si se ejecuta sin argumentos (doble clic o desde consola), abrir la interfaz moderna
     if len(sys.argv) == 1:
         try:
-            from ui import run_gui
-            run_gui()
+            from ui_web import run_modern_gui
+            run_modern_gui()
             return
-        except ImportError as e:
-            print(f"[AVISO] No se pudo iniciar la interfaz gráfica ({e}). Mostrando modo consola.")
+        except Exception as e:
+            print(f"[AVISO] Iniciando interfaz alternativa ({e}).")
+            try:
+                from ui import run_gui
+                run_gui()
+                return
+            except Exception as e2:
+                print(f"[ERROR] No se pudo iniciar ninguna interfaz: {e2}")
 
     parser = argparse.ArgumentParser(
         description="ArchiveConverter - Convertidor y caja de herramientas de archivos local y privado."
     )
     subparsers = parser.add_subparsers(dest="command", help="Comandos disponibles")
 
-    # Subcomando: gui (para forzar apertura de interfaz)
-    subparsers.add_parser("gui", help="Abrir la interfaz gráfica de escritorio")
+    # Subcomando: gui
+    parser_gui = subparsers.add_parser("gui", help="Abrir la interfaz gráfica de escritorio")
+    parser_gui.add_argument("--legacy", action="store_true", help="Abrir versión clásica CustomTkinter")
 
     # Subcomando: merge
     parser_merge = subparsers.add_parser("merge", help="Unir múltiples archivos PDF en uno solo")
@@ -102,8 +109,12 @@ def main():
     manager = ConverterManager()
 
     if args.command == "gui":
-        from ui import run_gui
-        run_gui()
+        if args.legacy:
+            from ui import run_gui
+            run_gui()
+        else:
+            from ui_web import run_modern_gui
+            run_modern_gui()
         return
     elif args.command == "merge":
         res = PDFToolkit.merge(args.files, args.output)
@@ -141,8 +152,8 @@ def main():
         return
 
     if not args.input_file:
-        from ui import run_gui
-        run_gui()
+        from ui_web import run_modern_gui
+        run_modern_gui()
         return
 
     handle_conversion(args, manager)
