@@ -49,7 +49,7 @@ class DesktopAPI:
         result = self._window.create_file_dialog(
             dialog_type=webview.OPEN_DIALOG,
             allow_multiple=False,
-            file_types=("Todos los archivos soportados (*.*)", "*.*")
+            file_types=("Archivos soportados (*.pdf;*.docx;*.png;*.jpg;*.jpeg;*.webp;*.ico)", "Todos los archivos (*.*)")
         )
         if result and len(result) > 0:
             p = Path(result[0])
@@ -64,7 +64,7 @@ class DesktopAPI:
         result = self._window.create_file_dialog(
             dialog_type=webview.OPEN_DIALOG,
             allow_multiple=True,
-            file_types=("Archivos PDF (*.pdf)", "*.pdf")
+            file_types=("Archivos PDF (*.pdf)", "Todos los archivos (*.*)")
         )
         files = []
         if result:
