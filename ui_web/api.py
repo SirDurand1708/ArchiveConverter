@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import List, Optional, Dict, Any
 import webview
 
-from core import ConverterManager, PDFToolkit, BackgroundRemover
+from core import ConverterManager, PDFToolkit, BackgroundRemover, ImageConverter
 
 
 class DesktopAPI:
@@ -58,6 +58,28 @@ class DesktopAPI:
             return self._file_info(p)
         return None
 
+    def load_files_from_paths(self, path_list: List[str]) -> List[Dict[str, Any]]:
+        """Carga metadatos de múltiples archivos para conversión por lotes."""
+        results = []
+        for p_str in path_list:
+            p = Path(p_str)
+            if p.exists() and p.is_file():
+                results.append(self._file_info(p))
+        return results
+
+    def get_common_target_formats(self, path_list: List[str]) -> List[str]:
+        """Calcula qué formatos de destino son compatibles con todos los archivos seleccionados."""
+        if not path_list:
+            return []
+        common: Optional[Set[str]] = None
+        for p_str in path_list:
+            targets = set(self.manager.get_supported_target_formats(Path(p_str)))
+            if common is None:
+                common = targets
+            else:
+                common = common.intersection(targets)
+        return sorted(list(common)) if common else []
+
     def load_dropped_base64(self, filename: str, data_url: str) -> Optional[Dict[str, Any]]:
         """Carga un archivo soltado cuando el navegador envía los bytes en Base64."""
         try:
@@ -86,13 +108,30 @@ class DesktopAPI:
         result = self._window.create_file_dialog(
             dialog_type=webview.OPEN_DIALOG,
             allow_multiple=False,
-            file_types=("Archivos soportados (*.pdf;*.docx;*.xlsx;*.xls;*.pptx;*.ppt;*.png;*.jpg;*.jpeg;*.webp;*.ico)", "Todos los archivos (*.*)")
+            file_types=("Archivos soportados (*.pdf;*.docx;*.xlsx;*.xls;*.pptx;*.ppt;*.png;*.jpg;*.jpeg;*.webp;*.ico;*.heic;*.heif)", "Todos los archivos (*.*)")
         )
         if result and len(result) > 0:
             p = Path(result[0])
             if p.exists():
                 return self._file_info(p)
         return None
+
+    def select_batch_files(self) -> List[Dict[str, Any]]:
+        """Abre el diálogo para seleccionar múltiples archivos a convertir a la vez."""
+        if not self._window:
+            return []
+        result = self._window.create_file_dialog(
+            dialog_type=webview.OPEN_DIALOG,
+            allow_multiple=True,
+            file_types=("Archivos soportados (*.pdf;*.docx;*.xlsx;*.xls;*.pptx;*.ppt;*.png;*.jpg;*.jpeg;*.webp;*.ico;*.heic;*.heif)", "Todos los archivos (*.*)")
+        )
+        files = []
+        if result:
+            for item in result:
+                p = Path(item)
+                if p.exists() and p.is_file():
+                    files.append(self._file_info(p))
+        return files
 
     def select_image_file(self) -> Optional[Dict[str, Any]]:
         """Abre el diálogo para seleccionar específicamente una imagen o firma."""
@@ -170,6 +209,94 @@ class DesktopAPI:
             "elapsed_seconds": result.elapsed_seconds,
             "error_message": result.error_message
         }
+
+    def convert_batch(
+        self,
+        file_paths: List[str],
+        target_format: str,
+        output_dir: Optional[str] = None,
+        auto_fit: bool = True,
+        orientation: str = "auto"
+    ) -> Dict[str, Any]:
+        """
+        Ejecuta la conversión por lotes (batch) de múltiples archivos.
+        """
+        success_list = []
+        failed_list = []
+        out_d = Path(output_dir) if output_dir else Path(file_paths[0]).parent
+
+        for p_str in file_paths:
+            in_p = Path(p_str)
+            target_ext = f".{target_format.lower()}"
+            out_target = out_d / f"{in_p.stem}{target_ext}"
+            if out_target == in_p:
+                out_target = out_d / f"{in_p.stem}_convertido{target_ext}"
+
+            res = self.manager.convert_file(
+                input_path=in_p,
+                target_format=target_format,
+                output_path=out_target,
+                auto_fit=auto_fit,
+                orientation=orientation
+            )
+
+            if res.success:
+                success_list.append({
+                    "name": in_p.name,
+                    "output_name": res.output_path.name,
+                    "elapsed": res.elapsed_seconds
+                })
+            else:
+                failed_list.append({
+                    "name": in_p.name,
+                    "error": res.error_message
+                })
+
+        return {
+            "total": len(file_paths),
+            "success_count": len(success_list),
+            "failed_count": len(failed_list),
+            "output_dir": str(out_d),
+            "success_list": success_list,
+            "failed_list": failed_list,
+        }
+
+    # ================= Compresión de Imágenes =================
+
+    def compress_image(
+        self,
+        file_path: str,
+        max_size_kb: Optional[int] = None,
+        quality: int = 80,
+        output_dir: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """Comprime una imagen reduciendo su tamaño en KB de forma inteligente."""
+        try:
+            in_p = Path(file_path)
+            out_target = None
+            if output_dir:
+                ext = in_p.suffix.lower()
+                if ext in {".heic", ".heif", ".bmp", ".tiff"}:
+                    ext = ".jpg"
+                out_target = Path(output_dir) / f"{in_p.stem}_comprimido{ext}"
+
+            res_p, old_sz, new_sz = ImageConverter.compress_image(
+                input_path=in_p,
+                output_path=out_target,
+                max_size_kb=max_size_kb,
+                target_quality=quality
+            )
+            reduction = (1 - (new_sz / old_sz)) * 100 if old_sz > 0 else 0
+            return {
+                "success": True,
+                "output_path": str(res_p),
+                "filename": res_p.name,
+                "old_size": self._format_size(old_sz),
+                "new_size": self._format_size(new_sz),
+                "reduction_percent": round(reduction, 1)
+            }
+        except Exception as e:
+            return {"success": False, "error_message": str(e)}
 
     # ================= Removedor de Fondos (IA) =================
 
