@@ -1,7 +1,6 @@
 from pathlib import Path
 from typing import Optional
 from PIL import Image
-from rembg import remove
 
 
 class BackgroundRemover:
@@ -18,6 +17,9 @@ class BackgroundRemover:
         input_path: str | Path,
         output_path: Optional[str | Path] = None
     ) -> Path:
+        # Carga perezosa (lazy import) para no ralentizar el inicio de la app
+        from rembg import remove
+
         in_p = Path(input_path).resolve()
         if not in_p.exists():
             raise FileNotFoundError(f"Archivo de imagen no encontrado: {in_p}")
