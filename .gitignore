@@ -29,6 +29,8 @@ ENV/
 # Output directories & caches
 output/
 temp/
+dist_portable/
+dist_installer/
 tests/output_files/
 tests/sample_files/
 *.tmp

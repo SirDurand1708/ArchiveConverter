@@ -1,11 +1,24 @@
+import sys
 from pathlib import Path
 import webview
 from .api import DesktopAPI
 
 
+def get_html_path() -> Path:
+    """Obtiene la ruta absoluta a index.html tanto en desarrollo como en ejecutable PyInstaller."""
+    if hasattr(sys, '_MEIPASS'):
+        p = Path(sys._MEIPASS) / "ui_web" / "index.html"
+        if p.exists():
+            return p.resolve()
+        p2 = Path(sys._MEIPASS) / "index.html"
+        if p2.exists():
+            return p2.resolve()
+    return (Path(__file__).parent / "index.html").resolve()
+
+
 def run_modern_gui():
     """Lanza la aplicación de escritorio moderna con WebView2."""
-    html_file = (Path(__file__).parent / "index.html").resolve()
+    html_file = get_html_path()
     api = DesktopAPI()
 
     window = webview.create_window(
