@@ -601,7 +601,7 @@
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
         </div>
         <h3>Arrastra tu archivo aquí para convertir</h3>
-        <p>Soporta PDF, DOCX, PNG, JPG, WEBP, ICO y más</p>
+        <p>Soporta PDF, Word, Excel, PowerPoint, Imágenes (PNG, JPG, WEBP) y más</p>
         <button class="btn-browse" type="button">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
           Seleccionar archivo
@@ -627,6 +627,30 @@
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m12 3-1.9 5.8a2 2 0 0 1-1.3 1.3L3 12l5.8 1.9a2 2 0 0 1 1.3 1.3L12 21l1.9-5.8a2 2 0 0 1 1.3-1.3L21 12l-5.8-1.9a2 2 0 0 1-1.3-1.3Z"/></svg>
             <span id="ai-remove-text">Quitar Fondo con IA (Generar PNG Transparente)</span>
           </button>
+        </div>
+
+        <!-- Special Excel auto-fit & orientation options -->
+        <div id="excel-options-container" style="display: none; background: var(--bg-dropzone); padding: 14px; border-radius: 10px; border: 1px solid var(--border);">
+          <div style="font-size: 12px; font-weight: 700; color: #3b82f6; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 10px; display: flex; align-items: center; gap: 6px;">
+            <span>📊 Ajuste Inteligente de Hoja de Cálculo</span>
+          </div>
+          <div class="options-grid">
+            <div class="field-group">
+              <label class="field-label" style="display: flex; align-items: center; gap: 8px; cursor: pointer; text-transform: none; font-size: 13px;">
+                <input type="checkbox" id="excel-autofit-check" checked style="width: 16px; height: 16px; accent-color: #2563eb;">
+                <span>Auto-ajustar columnas al ancho de página</span>
+              </label>
+              <span style="font-size: 11.5px; color: var(--text-muted);">Garantiza que ninguna columna quede cortada en horizontal.</span>
+            </div>
+            <div class="field-group">
+              <label class="field-label">Orientación:</label>
+              <select id="excel-orientation-select">
+                <option value="auto">Automática (Horizontal si la tabla es ancha)</option>
+                <option value="landscape">Horizontal (Landscape)</option>
+                <option value="portrait">Vertical (Portrait)</option>
+              </select>
+            </div>
+          </div>
         </div>
 
         <div class="options-grid">
@@ -1029,6 +1053,14 @@
         aiContainer.style.display = 'none';
       }
 
+      // Mostrar opciones especiales de Excel si es una hoja de cálculo
+      const excelContainer = document.getElementById('excel-options-container');
+      if (file.is_excel) {
+        excelContainer.style.display = 'block';
+      } else {
+        excelContainer.style.display = 'none';
+      }
+
       const select = document.getElementById('conv-format-select');
       select.innerHTML = '';
       if (file.supported_targets && file.supported_targets.length > 0) {
@@ -1096,10 +1128,15 @@
       hideStatus('conv-status');
 
       try {
+        const autoFit = document.getElementById('excel-autofit-check') ? document.getElementById('excel-autofit-check').checked : true;
+        const orientation = document.getElementById('excel-orientation-select') ? document.getElementById('excel-orientation-select').value : 'auto';
+
         const res = await window.pywebview.api.convert_file(
           currentConvertFile.path,
           targetFmt,
-          chosenOutputFolder
+          chosenOutputFolder,
+          autoFit,
+          orientation
         );
 
         if (res.success) {

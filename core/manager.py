@@ -3,6 +3,7 @@ from typing import List, Optional, Set
 from .base import BaseConverter, ConversionResult
 from .image_converter import ImageConverter
 from .document_converter import DocumentConverter
+from .office_converter import OfficeConverter
 
 
 class ConverterManager:
@@ -15,6 +16,7 @@ class ConverterManager:
         self.converters: List[BaseConverter] = [
             ImageConverter(),
             DocumentConverter(),
+            OfficeConverter(),
         ]
 
     def register_converter(self, converter: BaseConverter) -> None:

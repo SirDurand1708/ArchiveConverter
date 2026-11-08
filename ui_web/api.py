@@ -33,15 +33,20 @@ class DesktopAPI:
 
     def _file_info(self, file_path: Path) -> Dict[str, Any]:
         targets = self.manager.get_supported_target_formats(file_path)
-        is_image = file_path.suffix.lower() in BackgroundRemover.SUPPORTED_INPUTS
+        ext = file_path.suffix.lower()
+        is_image = ext in BackgroundRemover.SUPPORTED_INPUTS
+        is_excel = ext in {".xlsx", ".xls"}
+        is_presentation = ext in {".pptx", ".ppt"}
         return {
             "name": file_path.name,
             "path": str(file_path.resolve()),
             "size": self._format_size(file_path.stat().st_size),
             "size_bytes": file_path.stat().st_size,
-            "extension": file_path.suffix.lower().lstrip("."),
+            "extension": ext.lstrip("."),
             "supported_targets": targets,
             "is_image": is_image,
+            "is_excel": is_excel,
+            "is_presentation": is_presentation,
         }
 
     # ================= Carga y Drag & Drop =================
@@ -81,7 +86,7 @@ class DesktopAPI:
         result = self._window.create_file_dialog(
             dialog_type=webview.OPEN_DIALOG,
             allow_multiple=False,
-            file_types=("Archivos soportados (*.pdf;*.docx;*.png;*.jpg;*.jpeg;*.webp;*.ico)", "Todos los archivos (*.*)")
+            file_types=("Archivos soportados (*.pdf;*.docx;*.xlsx;*.xls;*.pptx;*.ppt;*.png;*.jpg;*.jpeg;*.webp;*.ico)", "Todos los archivos (*.*)")
         )
         if result and len(result) > 0:
             p = Path(result[0])
@@ -136,7 +141,9 @@ class DesktopAPI:
         self,
         input_path: str,
         target_format: str,
-        output_dir: Optional[str] = None
+        output_dir: Optional[str] = None,
+        auto_fit: bool = True,
+        orientation: str = "auto"
     ) -> Dict[str, Any]:
         """Ejecuta la conversión de archivo a través del motor core."""
         in_p = Path(input_path)
@@ -151,7 +158,9 @@ class DesktopAPI:
         result = self.manager.convert_file(
             input_path=in_p,
             target_format=target_format,
-            output_path=out_target
+            output_path=out_target,
+            auto_fit=auto_fit,
+            orientation=orientation
         )
 
         return {
