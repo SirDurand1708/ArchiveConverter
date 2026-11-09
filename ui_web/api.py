@@ -123,11 +123,20 @@ class DesktopAPI:
                 encoded = data_url
             file_bytes = base64.b64decode(encoded)
 
-            temp_dir = Path(tempfile.gettempdir()) / "ArchiveConverter"
+            temp_dir = (Path(tempfile.gettempdir()) / "ArchiveConverter").resolve()
             temp_dir.mkdir(parents=True, exist_ok=True)
-            temp_file = temp_dir / filename
-            temp_file.write_bytes(file_bytes)
 
+            # Sanitización contra Path Traversal y caracteres peligrosos
+            safe_name = Path(filename).name
+            safe_name = "".join(c for c in safe_name if c not in '<>:"/\\|?*').strip()
+            if not safe_name:
+                safe_name = "archivo_arrastrado.bin"
+
+            temp_file = (temp_dir / safe_name).resolve()
+            if not temp_file.is_relative_to(temp_dir):
+                raise ValueError("Ruta de archivo no autorizada.")
+
+            temp_file.write_bytes(file_bytes)
             return self._file_info(temp_file)
         except Exception as e:
             print(f"[ERROR] Error al procesar archivo arrastrado: {e}")
@@ -373,7 +382,12 @@ class DesktopAPI:
         try:
             in_p = Path(file_path)
             if mode == "range":
-                parts = page_range.split("-")
+                parts = [p.strip() for p in page_range.split("-")]
+                if len(parts) != 2 or not parts[0].isdigit() or not parts[1].isdigit():
+                    return {
+                        "success": False,
+                        "error_message": "Formato de rango no válido. Introduce 'desde-hasta' con números positivos (ej: 1-3)."
+                    }
                 fp, tp = int(parts[0]), int(parts[1])
                 res = PDFToolkit.split_range(in_p, fp, tp)
                 return {"success": True, "output_path": str(res), "filename": res.name}
@@ -477,9 +491,9 @@ class DesktopAPI:
             os.startfile(str(p))
 
     def open_folder(self, file_path: str):
-        p = Path(file_path)
+        p = Path(file_path).resolve()
         if p.exists():
             if p.is_dir():
                 os.startfile(str(p))
             else:
-                subprocess.Popen(f'explorer /select,"{str(p)}"')
+                subprocess.Popen(["explorer", f"/select,{str(p)}"])

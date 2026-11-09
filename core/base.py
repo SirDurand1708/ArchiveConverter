@@ -68,11 +68,12 @@ class BaseConverter(ABC):
 
         if output_path is None:
             out_path = in_path.with_suffix(target_ext)
-            # Avoid overwriting input if input and output have same extension
-            if out_path == in_path:
-                out_path = in_path.with_stem(f"{in_path.stem}_converted").with_suffix(target_ext)
         else:
             out_path = Path(output_path).resolve()
+
+        # Evitar sobrescribir el archivo de origen original
+        if out_path == in_path:
+            out_path = in_path.with_stem(f"{in_path.stem}_converted").with_suffix(target_ext)
 
         # Ensure destination directory exists
         out_path.parent.mkdir(parents=True, exist_ok=True)

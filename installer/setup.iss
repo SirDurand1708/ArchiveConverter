@@ -4,7 +4,7 @@
 #define MyAppName "ArchiveConverter"
 #define MyAppVersion "1.1.0"
 #define MyAppPublisher "ArchiveConverter Open Source"
-#define MyAppURL "https://github.com"
+#define MyAppURL "https://github.com/SirDurand1708/ArchiveConverter"
 #define MyAppExeName "ArchiveConverter.exe"
 
 [Setup]

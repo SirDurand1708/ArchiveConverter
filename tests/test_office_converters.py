@@ -79,6 +79,21 @@ class TestOfficeConverters(unittest.TestCase):
         with pymupdf.open(str(out)) as doc:
             self.assertEqual(len(doc), 2)  # Exactly 2 slides converted into 2 pages!
 
+    def test_excel_special_characters_to_pdf(self):
+        spec_excel = self.test_dir / "special_chars.xlsx"
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "Caracteres <Especiales>"
+        ws.append(["Formula & Test", "Val < 100", "Total > 50", "Q&A \"Quote\""])
+        ws.append(["A & B", "1 < 2", "10 > 5", "Preguntas & Respuestas"])
+        wb.save(spec_excel)
+        wb.close()
+
+        out = self.output_dir / "special_chars_converted.pdf"
+        res = self.manager.convert_file(spec_excel, "pdf", output_path=out)
+        self.assertTrue(res.success, f"Error en Excel con caracteres especiales: {res.error_message}")
+        self.assertTrue(out.exists())
+
 
 if __name__ == "__main__":
     unittest.main()

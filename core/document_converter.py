@@ -45,9 +45,32 @@ class DocumentConverter(BaseConverter):
 
         # 2. DOCX -> PDF
         if in_ext == ".docx" and out_ext == ".pdf":
-            from docx2pdf import convert as docx_to_pdf
-            docx_to_pdf(str(input_path), str(output_path))
-            return output_path
+            try:
+                from docx2pdf import convert as docx_to_pdf
+                docx_to_pdf(str(input_path), str(output_path))
+                return output_path
+            except Exception as docx_err:
+                # Fallback a LibreOffice si no tiene MS Word instalado
+                import shutil
+                import subprocess
+                candidates = [
+                    shutil.which("soffice"),
+                    r"C:\Program Files\LibreOffice\program\soffice.exe",
+                    r"C:\Program Files (x86)\LibreOffice\program\soffice.exe",
+                ]
+                soffice = next((c for c in candidates if c and Path(c).exists()), None)
+                if soffice:
+                    cmd = [soffice, "--headless", "--convert-to", "pdf", "--outdir", str(output_path.parent), str(input_path)]
+                    res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=60)
+                    if res.returncode == 0:
+                        expected = output_path.parent / f"{input_path.stem}.pdf"
+                        if expected.exists() and expected != output_path:
+                            shutil.move(str(expected), str(output_path))
+                        return output_path
+                raise RuntimeError(
+                    f"No se pudo convertir DOCX a PDF ({docx_err}). "
+                    "Se requiere Microsoft Word o LibreOffice instalado."
+                )
 
         # 3. PDF -> PNG or JPG (Render pages)
         if in_ext == ".pdf" and out_ext in {".png", ".jpg"}:

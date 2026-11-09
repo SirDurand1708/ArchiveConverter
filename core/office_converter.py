@@ -147,12 +147,32 @@ class OfficeConverter(BaseConverter):
         Motor alternativo 100% autónomo y offline para convertir Excel a PDF.
         Garantiza que todas las columnas encajen en el ancho de la hoja sin cortarse.
         """
+        import html
         import openpyxl
         from reportlab.lib import pagesizes, colors
         from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
         from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 
         wb = openpyxl.load_workbook(str(input_path), data_only=True)
+        try:
+            overall_max_cols = 0
+            all_sheets_data = []
+
+            for sheet in wb.worksheets:
+                rows = []
+                for row in sheet.iter_rows(values_only=True):
+                    if any(cell is not None for cell in row):
+                        rows.append([str(c) if c is not None else "" for c in row])
+                if rows:
+                    max_c = max(len(r) for r in rows)
+                    overall_max_cols = max(overall_max_cols, max_c)
+                    all_sheets_data.append((sheet.title, rows, max_c))
+        finally:
+            wb.close()
+
+        if not all_sheets_data:
+            raise ValueError("El archivo Excel no contiene datos para convertir.")
+
         elements = []
         styles = getSampleStyleSheet()
 
@@ -183,22 +203,6 @@ class OfficeConverter(BaseConverter):
             spaceAfter=8
         )
 
-        overall_max_cols = 0
-        all_sheets_data = []
-
-        for sheet in wb.worksheets:
-            rows = []
-            for row in sheet.iter_rows(values_only=True):
-                if any(cell is not None for cell in row):
-                    rows.append([str(c) if c is not None else "" for c in row])
-            if rows:
-                max_c = max(len(r) for r in rows)
-                overall_max_cols = max(overall_max_cols, max_c)
-                all_sheets_data.append((sheet.title, rows, max_c))
-
-        if not all_sheets_data:
-            raise ValueError("El archivo Excel no contiene datos para convertir.")
-
         # Determinar orientación de página
         if orientation == "landscape" or (orientation == "auto" and overall_max_cols > 6):
             page_size = pagesizes.landscape(pagesizes.A4)
@@ -210,7 +214,7 @@ class OfficeConverter(BaseConverter):
 
         for sheet_title, raw_rows, num_cols in all_sheets_data:
             if len(all_sheets_data) > 1:
-                elements.append(Paragraph(f"Hoja: {sheet_title}", sheet_title_style))
+                elements.append(Paragraph(f"Hoja: {html.escape(sheet_title)}", sheet_title_style))
 
             # Calcular anchos proporcionales de columnas basados en longitud de texto
             col_max_lengths = [3] * num_cols
@@ -233,7 +237,7 @@ class OfficeConverter(BaseConverter):
                 row_vals = list(row) + [""] * (num_cols - len(row))
                 for c_idx, val in enumerate(row_vals[:num_cols]):
                     st = header_style if r_idx == 0 else cell_style
-                    formatted_row.append(Paragraph(val, st))
+                    formatted_row.append(Paragraph(html.escape(val), st))
                 table_data.append(formatted_row)
 
             t = Table(table_data, colWidths=col_widths, repeatRows=1)

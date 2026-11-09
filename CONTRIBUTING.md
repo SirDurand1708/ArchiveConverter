@@ -18,7 +18,7 @@ Antes de desarrollar cualquier funcionalidad, ten en cuenta los siguientes pilar
 
 1. **Clonar el repositorio:**
    ```bash
-   git clone https://github.com/tu-usuario/ArchiveConverter.git
+   git clone https://github.com/SirDurand1708/ArchiveConverter.git
    cd ArchiveConverter
    ```
 

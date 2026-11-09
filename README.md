@@ -80,7 +80,7 @@ Si deseas clonar el repositorio y ejecutarlo o mejorarlo:
 
 ```powershell
 # 1. Clonar el repositorio
-git clone https://github.com/tu-usuario/ArchiveConverter.git
+git clone https://github.com/SirDurand1708/ArchiveConverter.git
 cd ArchiveConverter
 
 # 2. Crear entorno virtual

@@ -27,6 +27,8 @@ class PDFToolkit:
                 if not file_p.exists():
                     raise FileNotFoundError(f"Archivo no encontrado: {file_p}")
                 with pymupdf.open(str(file_p)) as doc:
+                    if doc.is_encrypted:
+                        raise PermissionError(f"El archivo '{file_p.name}' está protegido con contraseña. Desbloquéalo primero.")
                     merged.insert_pdf(doc)
             
             merged.save(str(out_p))
@@ -43,6 +45,8 @@ class PDFToolkit:
 
         generated_files: List[Path] = []
         with pymupdf.open(str(in_p)) as doc:
+            if doc.is_encrypted:
+                raise PermissionError(f"El archivo '{in_p.name}' está protegido con contraseña. Desbloquéalo primero.")
             total_pages = len(doc)
             for page_num in range(total_pages):
                 new_doc = pymupdf.open()
@@ -71,6 +75,8 @@ class PDFToolkit:
         out_p.parent.mkdir(parents=True, exist_ok=True)
 
         with pymupdf.open(str(in_p)) as doc:
+            if doc.is_encrypted:
+                raise PermissionError(f"El archivo '{in_p.name}' está protegido con contraseña. Desbloquéalo primero.")
             total = len(doc)
             if from_page < 1 or to_page > total or from_page > to_page:
                 raise ValueError(f"Rango inválido: {from_page}-{to_page}. El documento tiene {total} páginas.")
@@ -95,6 +101,8 @@ class PDFToolkit:
         out_p.parent.mkdir(parents=True, exist_ok=True)
 
         with pymupdf.open(str(in_p)) as doc:
+            if doc.is_encrypted:
+                raise PermissionError(f"El archivo '{in_p.name}' está protegido con contraseña. Desbloquéalo primero.")
             doc.save(
                 str(out_p),
                 garbage=4,   # Nivel máximo de eliminación de objetos huérfanos/inutilizados
@@ -114,13 +122,16 @@ class PDFToolkit:
 
         extracted_paths: List[Path] = []
         with pymupdf.open(str(in_p)) as doc:
+            if doc.is_encrypted:
+                raise PermissionError(f"El archivo '{in_p.name}' está protegido con contraseña. Desbloquéalo primero.")
             for page_idx, page in enumerate(doc):
                 image_list = page.get_images(full=True)
                 for img_idx, img in enumerate(image_list):
                     xref = img[0]
                     base_image = doc.extract_image(xref)
                     image_bytes = base_image["image"]
-                    image_ext = base_image["ext"]
+                    raw_ext = base_image.get("ext", "png")
+                    image_ext = "".join(c for c in raw_ext if c.isalnum()) or "png"
                     
                     img_file = out_d / f"img_pag_{page_idx + 1}_{img_idx + 1}.{image_ext}"
                     img_file.write_bytes(image_bytes)
@@ -145,6 +156,8 @@ class PDFToolkit:
         out_p.parent.mkdir(parents=True, exist_ok=True)
 
         with pymupdf.open(str(in_p)) as doc:
+            if doc.is_encrypted:
+                raise PermissionError(f"El archivo '{in_p.name}' está protegido con contraseña. Desbloquéalo primero.")
             for page in doc:
                 page.set_rotation((page.rotation + degrees) % 360)
             doc.save(str(out_p))
@@ -212,6 +225,8 @@ class PDFToolkit:
         out_p.parent.mkdir(parents=True, exist_ok=True)
 
         with pymupdf.open(str(in_p)) as doc:
+            if doc.is_encrypted:
+                raise PermissionError(f"El archivo '{in_p.name}' está protegido con contraseña. Desbloquéalo primero.")
             for page in doc:
                 rect = page.rect
                 # Center-diagonal anchor point
@@ -251,6 +266,8 @@ class PDFToolkit:
         out_p.parent.mkdir(parents=True, exist_ok=True)
 
         with pymupdf.open(str(in_p)) as doc:
+            if doc.is_encrypted:
+                raise PermissionError(f"El archivo '{in_p.name}' está protegido con contraseña. Desbloquéalo primero.")
             total = len(doc)
             target_idx = (total - 1) if page_num == -1 else (page_num - 1)
             if target_idx < 0 or target_idx >= total:

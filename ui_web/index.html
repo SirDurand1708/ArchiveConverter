@@ -942,7 +942,7 @@
           ✨ <strong>Calidad nativa:</strong> Reconstrucción semántica de documentos.
         </p>
 
-        <button class="btn-browse" onclick="window.open('https://github.com')">
+        <button class="btn-browse" onclick="window.open('https://github.com/SirDurand1708/ArchiveConverter')">
           Visitar repositorio en GitHub
         </button>
       </div>
@@ -1314,13 +1314,28 @@
       files.forEach((f) => {
         const item = document.createElement('div');
         item.style.cssText = 'display: flex; justify-content: space-between; align-items: center; font-size: 12px; padding: 4px 6px; border-bottom: 1px solid var(--border);';
-        item.innerHTML = `
-          <div style="display: flex; align-items: center; gap: 8px; overflow: hidden;">
-            <span class="file-badge" style="font-size: 9px; padding: 2px 5px;">${f.extension}</span>
-            <span style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 320px;">${f.name}</span>
-          </div>
-          <span style="color: var(--text-muted); font-size: 11px;">${f.size}</span>
-        `;
+
+        const leftGroup = document.createElement('div');
+        leftGroup.style.cssText = 'display: flex; align-items: center; gap: 8px; overflow: hidden;';
+
+        const badge = document.createElement('span');
+        badge.className = 'file-badge';
+        badge.style.cssText = 'font-size: 9px; padding: 2px 5px;';
+        badge.textContent = f.extension;
+
+        const nameSpan = document.createElement('span');
+        nameSpan.style.cssText = 'white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 320px;';
+        nameSpan.textContent = f.name;
+
+        leftGroup.appendChild(badge);
+        leftGroup.appendChild(nameSpan);
+
+        const sizeSpan = document.createElement('span');
+        sizeSpan.style.cssText = 'color: var(--text-muted); font-size: 11px;';
+        sizeSpan.textContent = f.size;
+
+        item.appendChild(leftGroup);
+        item.appendChild(sizeSpan);
         previewContainer.appendChild(item);
       });
 
