@@ -51,6 +51,21 @@ def main():
                 return
             except Exception as e2:
                 print(f"[ERROR] No se pudo iniciar ninguna interfaz: {e2}")
+                return
+
+    # Si se pasa un solo archivo (menú contextual del Explorador de Windows o arrastrar sobre el .exe)
+    if len(sys.argv) == 2 and not sys.argv[1].startswith("-"):
+        subcmds = {"gui", "merge", "split", "compress", "extract-images", "rotate", "protect", "unlock", "-h", "--help"}
+        if sys.argv[1].lower() not in subcmds:
+            cand = Path(sys.argv[1])
+            if cand.exists() and cand.is_file():
+                if hasattr(sys, 'frozen') or not hasattr(sys.stdin, 'isatty') or not sys.stdin.isatty():
+                    try:
+                        from ui_web import run_modern_gui
+                        run_modern_gui(initial_file=str(cand.resolve()))
+                        return
+                    except Exception:
+                        pass
 
     parser = argparse.ArgumentParser(
         description="ArchiveConverter - Convertidor y caja de herramientas de archivos local y privado."
@@ -59,6 +74,7 @@ def main():
 
     # Subcomando: gui
     parser_gui = subparsers.add_parser("gui", help="Abrir la interfaz gráfica de escritorio")
+    parser_gui.add_argument("file", nargs="?", help="Archivo inicial a precargar en la interfaz")
     parser_gui.add_argument("--legacy", action="store_true", help="Abrir versión clásica CustomTkinter")
 
     # Subcomando: merge
@@ -114,7 +130,7 @@ def main():
             run_gui()
         else:
             from ui_web import run_modern_gui
-            run_modern_gui()
+            run_modern_gui(initial_file=args.file)
         return
     elif args.command == "merge":
         res = PDFToolkit.merge(args.files, args.output)
@@ -154,6 +170,12 @@ def main():
     if not args.input_file:
         from ui_web import run_modern_gui
         run_modern_gui()
+        return
+
+    # Si se pasa un archivo sin formato de destino y no estamos en terminal interactivo
+    if not args.target_format and (hasattr(sys, 'frozen') or not hasattr(sys.stdin, 'isatty') or not sys.stdin.isatty()):
+        from ui_web import run_modern_gui
+        run_modern_gui(initial_file=args.input_file)
         return
 
     handle_conversion(args, manager)

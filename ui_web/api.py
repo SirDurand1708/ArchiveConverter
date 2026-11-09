@@ -2,11 +2,36 @@ import os
 import subprocess
 import base64
 import tempfile
+import atexit
+import shutil
 from pathlib import Path
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Set
 import webview
 
 from core import ConverterManager, PDFToolkit, BackgroundRemover, ImageConverter
+
+TEMP_FOLDER = Path(tempfile.gettempdir()) / "ArchiveConverter"
+
+
+def cleanup_temp_files():
+    """Limpia los archivos temporales generados por la aplicación."""
+    try:
+        if TEMP_FOLDER.exists():
+            for item in TEMP_FOLDER.iterdir():
+                try:
+                    if item.is_file():
+                        item.unlink(missing_ok=True)
+                    elif item.is_dir():
+                        shutil.rmtree(item, ignore_errors=True)
+                except Exception:
+                    pass
+    except Exception:
+        pass
+
+
+# Limpiar residuos al salir y al iniciar
+atexit.register(cleanup_temp_files)
+cleanup_temp_files()
 
 
 class DesktopAPI:
@@ -16,9 +41,18 @@ class DesktopAPI:
     await window.pywebview.api.method_name(...)
     """
 
-    def __init__(self):
+    def __init__(self, initial_file: Optional[str] = None):
         self.manager = ConverterManager()
         self._window: Optional[webview.Window] = None
+        self.initial_file = initial_file
+
+    def get_initial_file(self) -> Optional[Dict[str, Any]]:
+        """Devuelve los datos del archivo inicial si la app se abrió con uno (ej: menú contextual)."""
+        if self.initial_file:
+            p = Path(self.initial_file)
+            if p.exists() and p.is_file():
+                return self._file_info(p)
+        return None
 
     def set_window(self, window: webview.Window):
         self._window = window

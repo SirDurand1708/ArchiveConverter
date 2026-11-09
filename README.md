@@ -7,6 +7,10 @@
 ![Platform](https://img.shields.io/badge/platform-Windows%2010%20%7C%2011-0078D6)
 ![Privacy](https://img.shields.io/badge/privacy-100%25%20Offline%20Local-green)
 
+<p align="center">
+  <img src="assets/screenshot.png" alt="ArchiveConverter Desktop Interface" width="850">
+</p>
+
 ---
 
 ## 🌟 ¿Por qué ArchiveConverter?
@@ -25,6 +29,8 @@ La mayoría de convertidores online tienen graves problemas:
 
 ### 📁 1. Convertidor Universal y por Lotes (Batch Mode)
 * **Arrastrar y soltar:** Suelta uno o 20 archivos simultáneamente desde el Explorador de Windows.
+* **Integración con el Menú Contextual:** Haz clic derecho sobre cualquier archivo en el explorador $\to$ *"Convertir con ArchiveConverter"* para abrirlo al instante.
+* **Notificaciones de Escritorio:** Avisos nativos del sistema al finalizar conversiones extensas o tareas por lotes.
 * **Documentos:**
   * **PDF $\to$ Word (DOCX):** Reconstrucción estructural real (párrafos, tablas y fuentes editables, no capturas de imagen).
   * **Word $\to$ PDF:** Exportación nativa con máxima fidelidad visual y soporte para firmas.

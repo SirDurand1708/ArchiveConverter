@@ -1038,8 +1038,57 @@
       }, false);
     }
 
-    // Configurar zonas de soltar
+    // ================= NOTIFICACIONES Y PRECARGA =================
+    function triggerDesktopNotification(title, message) {
+      try {
+        if ('Notification' in window) {
+          if (Notification.permission === 'granted') {
+            new Notification(title, {
+              body: message,
+              silent: false
+            });
+          } else if (Notification.permission !== 'denied') {
+            Notification.requestPermission().then(permission => {
+              if (permission === 'granted') {
+                new Notification(title, {
+                  body: message,
+                  silent: false
+                });
+              }
+            });
+          }
+        }
+      } catch (err) {
+        console.warn('Desktop notification warning:', err);
+      }
+    }
+
+    async function checkInitialFile() {
+      try {
+        if (window.pywebview && window.pywebview.api && window.pywebview.api.get_initial_file) {
+          const initFile = await window.pywebview.api.get_initial_file();
+          if (initFile) {
+            setLoadedConvertFile(initFile);
+          }
+        }
+      } catch (e) {
+        console.warn('Initial file check error:', e);
+      }
+    }
+
+    window.addEventListener('pywebviewready', () => {
+      checkInitialFile();
+      if ('Notification' in window && Notification.permission === 'default') {
+        Notification.requestPermission();
+      }
+    });
+
+    // Configurar zonas de soltar y precarga inicial
     window.addEventListener('DOMContentLoaded', () => {
+      if (window.pywebview && window.pywebview.api) {
+        checkInitialFile();
+      }
+
       setupDropzoneDnd('conv-dropzone', async (files) => {
         if (files.length === 1) {
           await processDroppedFile(files[0], setLoadedConvertFile);
@@ -1186,6 +1235,7 @@
         if (res.success) {
           lastResultPath = res.output_path;
           showStatus('conv-status', `✔ ¡Fondo eliminado con éxito! Guardado en: ${res.filename}`, 'success');
+          triggerDesktopNotification('ArchiveConverter', `¡Fondo eliminado con éxito! Guardado en: ${res.filename}`);
         } else {
           showStatus('conv-status', `✖ Error al quitar fondo: ${res.error_message}`, 'error');
         }
@@ -1215,11 +1265,9 @@
 
         if (res.success) {
           lastResultPath = res.output_path;
-          showStatus(
-            'conv-status',
-            `✔ ¡Imagen optimizada! Reducción: ${res.reduction_percent}% (${res.old_size} -> ${res.new_size})`,
-            'success'
-          );
+          const msg = `¡Imagen optimizada! Reducción: ${res.reduction_percent}% (${res.old_size} -> ${res.new_size})`;
+          showStatus('conv-status', `✔ ${msg}`, 'success');
+          triggerDesktopNotification('ArchiveConverter', msg);
         } else {
           showStatus('conv-status', `✖ Error al comprimir: ${res.error_message}`, 'error');
         }
@@ -1329,11 +1377,13 @@
         );
 
         lastResultPath = res.output_dir;
+        const batchMsg = `¡Lote completado! ${res.success_count} de ${res.total} convertidos exitosamente`;
         showStatus(
           'conv-status',
-          `✔ ¡Lote completado! ${res.success_count} de ${res.total} convertidos exitosamente (${res.failed_count} errores)`,
+          `✔ ${batchMsg} (${res.failed_count} errores)`,
           res.failed_count === 0 ? 'success' : 'error'
         );
+        triggerDesktopNotification('ArchiveConverter', batchMsg);
       } catch (err) {
         showStatus('conv-status', `✖ Error en conversión por lotes: ${err}`, 'error');
       } finally {
@@ -1379,6 +1429,7 @@
         if (res.success) {
           lastResultPath = res.output_path;
           showStatus('conv-status', `✔ ¡Conversión exitosa en ${res.elapsed_seconds}s! (${res.filename})`, 'success');
+          triggerDesktopNotification('ArchiveConverter', `¡Conversión completada! Archivo: ${res.filename}`);
         } else {
           showStatus('conv-status', `✖ Error: ${res.error_message}`, 'error');
         }
@@ -1519,6 +1570,7 @@
       if (res.success) {
         lastToolResultPath = res.output_path;
         showStatus('tools-status', `✔ ${successMsg}`, 'success');
+        triggerDesktopNotification('ArchiveConverter', successMsg);
       } else {
         showStatus('tools-status', `✖ Error: ${res.error_message}`, 'error');
       }

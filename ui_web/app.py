@@ -1,5 +1,6 @@
 import sys
 from pathlib import Path
+from typing import Optional
 import webview
 from .api import DesktopAPI
 
@@ -16,10 +17,10 @@ def get_html_path() -> Path:
     return (Path(__file__).parent / "index.html").resolve()
 
 
-def run_modern_gui():
+def run_modern_gui(initial_file: Optional[str] = None):
     """Lanza la aplicación de escritorio moderna con WebView2."""
     html_file = get_html_path()
-    api = DesktopAPI()
+    api = DesktopAPI(initial_file=initial_file)
 
     window = webview.create_window(
         title="ArchiveConverter - Tu Convertidor Privado y Offline",
