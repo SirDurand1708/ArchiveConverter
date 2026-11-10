@@ -1,7 +1,6 @@
 import sys
 import argparse
 from pathlib import Path
-from core import ConverterManager, PDFToolkit
 
 
 def handle_conversion(args, manager):
@@ -122,6 +121,7 @@ def main():
     parser.add_argument("-o", "--output", help="Ruta o nombre del archivo de salida")
 
     args = parser.parse_args()
+    from core import ConverterManager, PDFToolkit
     manager = ConverterManager()
 
     if args.command == "gui":

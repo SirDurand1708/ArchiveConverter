@@ -3,12 +3,18 @@ from typing import Set, Optional, Tuple
 from PIL import Image
 from .base import BaseConverter
 
-# Registrar soporte nativo para fotos de iPhone (.heic, .heif)
-try:
-    import pillow_heif
-    pillow_heif.register_heif_opener()
-except ImportError:
-    pass
+# Soporte perezoso (lazy) para fotos de iPhone (.heic, .heif) para acelerar el inicio
+_heif_initialized = False
+
+def _ensure_heif_support():
+    global _heif_initialized
+    if not _heif_initialized:
+        try:
+            import pillow_heif
+            pillow_heif.register_heif_opener()
+            _heif_initialized = True
+        except ImportError:
+            pass
 
 
 class ImageConverter(BaseConverter):
@@ -40,6 +46,8 @@ class ImageConverter(BaseConverter):
         quality: int = 95,
         **kwargs
     ) -> Path:
+        if input_path.suffix.lower() in {".heic", ".heif"}:
+            _ensure_heif_support()
         try:
             with Image.open(input_path) as img:
                 out_ext = target_ext.lower()
@@ -98,6 +106,9 @@ class ImageConverter(BaseConverter):
 
         out_p = Path(output_path).resolve() if output_path else in_p.with_stem(f"{in_p.stem}_comprimido").with_suffix(out_ext)
         out_p.parent.mkdir(parents=True, exist_ok=True)
+
+        if in_p.suffix.lower() in {".heic", ".heif"}:
+            _ensure_heif_support()
 
         try:
             with Image.open(in_p) as img:

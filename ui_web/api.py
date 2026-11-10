@@ -4,9 +4,17 @@ import base64
 import tempfile
 import atexit
 import shutil
+import datetime
+import threading
+import concurrent.futures
+import json
+import io
 from pathlib import Path
 from typing import List, Optional, Dict, Any, Set
-import webview
+try:
+    import webview
+except ImportError:
+    webview = None
 
 from core import ConverterManager, PDFToolkit, BackgroundRemover, ImageConverter
 
@@ -45,6 +53,7 @@ class DesktopAPI:
         self.manager = ConverterManager()
         self._window: Optional[webview.Window] = None
         self.initial_file = initial_file
+        self.history: List[Dict[str, Any]] = []
 
     def get_initial_file(self) -> Optional[Dict[str, Any]]:
         """Devuelve los datos del archivo inicial si la app se abrió con uno (ej: menú contextual)."""
@@ -65,12 +74,57 @@ class DesktopAPI:
         else:
             return f"{size_bytes / (1024 * 1024):.2f} MB"
 
+    def _generate_thumbnail(self, file_path: Path) -> Optional[str]:
+        """Genera una miniatura ligera en Base64 para imágenes y documentos PDF."""
+        ext = file_path.suffix.lower()
+        try:
+            if ext in {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".ico"}:
+                from PIL import Image
+                with Image.open(file_path) as img:
+                    img_copy = img.copy()
+                    img_copy.thumbnail((160, 160))
+                    buf = io.BytesIO()
+                    if img_copy.mode in ("RGBA", "LA") or (img_copy.mode == "P" and "transparency" in img_copy.info):
+                        img_copy.save(buf, format="PNG")
+                        b64 = base64.b64encode(buf.getvalue()).decode("utf-8")
+                        return f"data:image/png;base64,{b64}"
+                    else:
+                        if img_copy.mode != "RGB":
+                            img_copy = img_copy.convert("RGB")
+                        img_copy.save(buf, format="JPEG", quality=80)
+                        b64 = base64.b64encode(buf.getvalue()).decode("utf-8")
+                        return f"data:image/jpeg;base64,{b64}"
+            elif ext == ".pdf":
+                try:
+                    import pymupdf
+                    with pymupdf.open(str(file_path)) as doc:
+                        if not doc.is_encrypted and len(doc) > 0:
+                            page = doc[0]
+                            pix = page.get_pixmap(dpi=60)
+                            b64 = base64.b64encode(pix.tobytes("png")).decode("utf-8")
+                            return f"data:image/png;base64,{b64}"
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        return None
+
     def _file_info(self, file_path: Path) -> Dict[str, Any]:
         targets = self.manager.get_supported_target_formats(file_path)
         ext = file_path.suffix.lower()
         is_image = ext in BackgroundRemover.SUPPORTED_INPUTS
         is_excel = ext in {".xlsx", ".xls"}
         is_presentation = ext in {".pptx", ".ppt"}
+
+        page_count = None
+        if ext == ".pdf":
+            try:
+                import pymupdf
+                with pymupdf.open(str(file_path)) as doc:
+                    page_count = len(doc)
+            except Exception:
+                pass
+
         return {
             "name": file_path.name,
             "path": str(file_path.resolve()),
@@ -81,7 +135,34 @@ class DesktopAPI:
             "is_image": is_image,
             "is_excel": is_excel,
             "is_presentation": is_presentation,
+            "page_count": page_count,
+            "thumbnail": self._generate_thumbnail(file_path)
         }
+
+    # ================= Historial de Sesión =================
+
+    def _add_history(self, name: str, output_path: str, op_type: str, elapsed: float = 0.0):
+        try:
+            self.history.insert(0, {
+                "name": name,
+                "path": str(output_path),
+                "type": op_type,
+                "time": datetime.datetime.now().strftime("%H:%M:%S"),
+                "elapsed": round(elapsed, 2)
+            })
+            if len(self.history) > 40:
+                self.history.pop()
+        except Exception:
+            pass
+
+    def get_history(self) -> List[Dict[str, Any]]:
+        """Devuelve el historial de tareas y conversiones realizadas en la sesión."""
+        return self.history
+
+    def clear_history(self) -> bool:
+        """Limpia el registro de conversiones de la sesión."""
+        self.history.clear()
+        return True
 
     # ================= Carga y Drag & Drop =================
 
@@ -100,6 +181,10 @@ class DesktopAPI:
             if p.exists() and p.is_file():
                 results.append(self._file_info(p))
         return results
+
+    def get_files_details(self, path_list: List[str]) -> List[Dict[str, Any]]:
+        """Devuelve información detallada de una lista de archivos para vistas interactivas (ej: Merge)."""
+        return self.load_files_from_paths(path_list)
 
     def get_common_target_formats(self, path_list: List[str]) -> List[str]:
         """Calcula qué formatos de destino son compatibles con todos los archivos seleccionados."""
@@ -245,6 +330,14 @@ class DesktopAPI:
             orientation=orientation
         )
 
+        if result.success and result.output_path:
+            self._add_history(
+                result.output_path.name,
+                str(result.output_path),
+                f"Conversión ({target_format.upper()})",
+                result.elapsed_seconds
+            )
+
         return {
             "success": result.success,
             "output_path": str(result.output_path) if result.output_path else None,
@@ -262,13 +355,18 @@ class DesktopAPI:
         orientation: str = "auto"
     ) -> Dict[str, Any]:
         """
-        Ejecuta la conversión por lotes (batch) de múltiples archivos.
+        Ejecuta la conversión por lotes (batch) en paralelo con ThreadPoolExecutor,
+        acelerando hasta 4x la velocidad y reportando progreso en tiempo real.
         """
         success_list = []
         failed_list = []
         out_d = Path(output_dir) if output_dir else Path(file_paths[0]).parent
+        total = len(file_paths)
+        completed_lock = threading.Lock()
+        completed_count = 0
 
-        for p_str in file_paths:
+        def process_single(p_str: str):
+            nonlocal completed_count
             in_p = Path(p_str)
             target_ext = f".{target_format.lower()}"
             out_target = out_d / f"{in_p.stem}{target_ext}"
@@ -283,20 +381,38 @@ class DesktopAPI:
                 orientation=orientation
             )
 
+            with completed_lock:
+                completed_count += 1
+                curr_done = completed_count
+
+            if self._window:
+                try:
+                    safe_name = json.dumps(in_p.name)
+                    self._window.evaluate_js(
+                        f"if (window.onBatchProgressUpdate) window.onBatchProgressUpdate({curr_done}, {total}, {safe_name});"
+                    )
+                except Exception:
+                    pass
+
             if res.success:
-                success_list.append({
-                    "name": in_p.name,
-                    "output_name": res.output_path.name,
-                    "elapsed": res.elapsed_seconds
-                })
+                return True, in_p.name, res.output_path.name, res.elapsed_seconds, str(res.output_path)
             else:
-                failed_list.append({
-                    "name": in_p.name,
-                    "error": res.error_message
-                })
+                return False, in_p.name, res.error_message, res.elapsed_seconds, None
+
+        max_workers = min(4, max(1, os.cpu_count() or 2))
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+            results = list(executor.map(process_single, file_paths))
+
+        for ok, name, detail, elapsed, out_p in results:
+            if ok:
+                success_list.append({"name": name, "output_name": detail, "elapsed": elapsed})
+                if out_p:
+                    self._add_history(detail, out_p, f"Lote ({target_format.upper()})", elapsed)
+            else:
+                failed_list.append({"name": name, "error": detail})
 
         return {
-            "total": len(file_paths),
+            "total": total,
             "success_count": len(success_list),
             "failed_count": len(failed_list),
             "output_dir": str(out_d),
@@ -330,6 +446,9 @@ class DesktopAPI:
                 target_quality=quality
             )
             reduction = (1 - (new_sz / old_sz)) * 100 if old_sz > 0 else 0
+
+            self._add_history(res_p.name, str(res_p), "Compresión Imagen")
+
             return {
                 "success": True,
                 "output_path": str(res_p),
@@ -352,6 +471,7 @@ class DesktopAPI:
                 out_target = Path(output_dir) / f"{in_p.stem}_sin_fondo.png"
 
             res = BackgroundRemover.remove_background(in_p, out_target)
+            self._add_history(res.name, str(res), "Quitar Fondo IA")
             return {
                 "success": True,
                 "output_path": str(res),
@@ -374,6 +494,7 @@ class DesktopAPI:
                 counter += 1
 
             res = PDFToolkit.merge(paths, dest_file)
+            self._add_history(res.name, str(res), "Unir PDFs")
             return {"success": True, "output_path": str(res), "filename": res.name}
         except Exception as e:
             return {"success": False, "error_message": str(e)}
@@ -390,9 +511,11 @@ class DesktopAPI:
                     }
                 fp, tp = int(parts[0]), int(parts[1])
                 res = PDFToolkit.split_range(in_p, fp, tp)
+                self._add_history(res.name, str(res), f"Dividir PDF ({fp}-{tp})")
                 return {"success": True, "output_path": str(res), "filename": res.name}
             else:
                 files = PDFToolkit.split_all_pages(in_p)
+                self._add_history(f"{len(files)} páginas", str(files[0].parent), "Dividir PDF")
                 return {
                     "success": True,
                     "output_path": str(files[0].parent),
@@ -409,6 +532,7 @@ class DesktopAPI:
             res = PDFToolkit.compress(in_p)
             new_size = res.stat().st_size
             reduction = (1 - (new_size / old_size)) * 100 if old_size > 0 else 0
+            self._add_history(res.name, str(res), "Comprimir PDF")
             return {
                 "success": True,
                 "output_path": str(res),
@@ -426,6 +550,7 @@ class DesktopAPI:
             imgs = PDFToolkit.extract_images(in_p)
             if not imgs:
                 return {"success": False, "error_message": "No se encontraron imágenes en este PDF."}
+            self._add_history(f"{len(imgs)} imágenes", str(imgs[0].parent), "Extraer Imágenes PDF")
             return {
                 "success": True,
                 "output_path": str(imgs[0].parent),
@@ -438,6 +563,7 @@ class DesktopAPI:
     def pdf_rotate(self, file_path: str, degrees: int = 90) -> Dict[str, Any]:
         try:
             res = PDFToolkit.rotate_pages(Path(file_path), degrees=degrees)
+            self._add_history(res.name, str(res), f"Rotar PDF ({degrees}°)")
             return {"success": True, "output_path": str(res), "filename": res.name}
         except Exception as e:
             return {"success": False, "error_message": str(e)}
@@ -445,6 +571,7 @@ class DesktopAPI:
     def pdf_protect(self, file_path: str, password: str) -> Dict[str, Any]:
         try:
             res = PDFToolkit.protect(Path(file_path), user_password=password)
+            self._add_history(res.name, str(res), "Proteger PDF")
             return {"success": True, "output_path": str(res), "filename": res.name}
         except Exception as e:
             return {"success": False, "error_message": str(e)}
@@ -452,6 +579,7 @@ class DesktopAPI:
     def pdf_unlock(self, file_path: str, password: str) -> Dict[str, Any]:
         try:
             res = PDFToolkit.unlock(Path(file_path), password=password)
+            self._add_history(res.name, str(res), "Desbloquear PDF")
             return {"success": True, "output_path": str(res), "filename": res.name}
         except Exception as e:
             return {"success": False, "error_message": str(e)}
@@ -460,6 +588,7 @@ class DesktopAPI:
         """Añade marca de agua diagonal con opacidad suave a un PDF."""
         try:
             res = PDFToolkit.add_watermark(Path(file_path), watermark_text=text)
+            self._add_history(res.name, str(res), "Marca de Agua PDF")
             return {"success": True, "output_path": str(res), "filename": res.name}
         except Exception as e:
             return {"success": False, "error_message": str(e)}
@@ -479,6 +608,7 @@ class DesktopAPI:
                 position=position,
                 page_num=page_num
             )
+            self._add_history(res.name, str(res), "Firmar PDF")
             return {"success": True, "output_path": str(res), "filename": res.name}
         except Exception as e:
             return {"success": False, "error_message": str(e)}

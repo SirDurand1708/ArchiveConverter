@@ -1,6 +1,15 @@
 from pathlib import Path
 from typing import List, Optional, Sequence
-import pymupdf
+
+try:
+    import pymupdf
+except ImportError:
+    pymupdf = None
+
+
+def _require_pymupdf():
+    if pymupdf is None:
+        raise ImportError("El módulo 'pymupdf' no está disponible. Ejecuta: pip install pymupdf")
 
 
 class PDFToolkit:
