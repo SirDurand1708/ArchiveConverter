@@ -69,8 +69,10 @@ La mayoría de convertidores online tienen graves problemas:
 3. Haz doble clic en `ArchiveConverter.exe` para abrir el programa de inmediato.
 
 ### Opción B: Instalador de Windows (`Setup.exe`)
-1. Descarga `ArchiveConverter-Setup-v1.1.0.exe`.
+1. Descarga `ArchiveConverter-Setup-v1.2.0.exe` (o la última versión en **Releases**).
 2. Sigue el asistente de instalación clásico (crea acceso directo en el escritorio y desinstalador en el Panel de Control).
+
+> **Nota sobre Windows SmartScreen / Windows Defender:** Al ser un proyecto Open Source independiente sin certificado comercial de firma de código (*Code Signing*), Windows puede mostrar el aviso *"Windows protegió su PC"* al ejecutar el binario por primera vez. Haz clic en **Más información → Ejecutar de todas formas** y verifica la integridad del archivo descargado comparando su hash SHA-256 (`Get-FileHash <archivo> -Algorithm SHA256`) contra el archivo `SHA256SUMS.txt` adjunto en cada Release.
 
 ---
 

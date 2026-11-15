@@ -50,12 +50,17 @@ class TestBackgroundRemoverV3(unittest.TestCase):
         model_file = self.tmp_dir / "u2net.onnx"
         model_file.write_bytes(b"fake-onnx-weights-payload")
 
-        digest1 = BackgroundRemover.verify_model_integrity(model_file)
+        # Por defecto exige U2NET_EXPECTED_SHA256 oficial -> archivo dummy falla con MODEL_CORRUPT
+        with self.assertRaises(BackgroundRemovalError) as ctx_default:
+            BackgroundRemover.verify_model_integrity(model_file)
+        self.assertEqual(ctx_default.exception.error_code, "MODEL_CORRUPT")
+
+        digest1 = BackgroundRemover.verify_model_integrity(model_file, expected_sha256="")
         self.assertEqual(len(digest1), 64)
 
         # Segunda llamada debe venir de caché sin re-abrir el archivo
         with patch("builtins.open", side_effect=AssertionError("No debió re-hashear el modelo cacheado")):
-            digest2 = BackgroundRemover.verify_model_integrity(model_file)
+            digest2 = BackgroundRemover.verify_model_integrity(model_file, expected_sha256="")
         self.assertEqual(digest1, digest2)
 
         with self.assertRaises(BackgroundRemovalError) as ctx:
@@ -148,9 +153,10 @@ class TestBackgroundRemoverV3(unittest.TestCase):
         img_path = self.tmp_dir / "input.png"
         Image.new("RGB", (64, 64), (100, 150, 200)).save(img_path)
 
-        with patch.object(BackgroundRemover, "find_local_model", return_value=model_file):
-            with self.assertRaises(BackgroundRemovalError) as ctx:
-                BackgroundRemover.remove_background_structured(img_path, output_dir=self.tmp_dir)
+        with patch.dict(os.environ, {"U2NET_EXPECTED_SHA256": ""}):
+            with patch.object(BackgroundRemover, "find_local_model", return_value=model_file):
+                with self.assertRaises(BackgroundRemovalError) as ctx:
+                    BackgroundRemover.remove_background_structured(img_path, output_dir=self.tmp_dir)
         self.assertEqual(ctx.exception.error_code, "MODEL_CORRUPT")
 
     def test_busy_rejection_when_semaphore_held(self):
@@ -162,13 +168,14 @@ class TestBackgroundRemoverV3(unittest.TestCase):
         acquired = BackgroundRemover._infer_semaphore.acquire(blocking=False)
         self.assertTrue(acquired)
         try:
-            with patch.object(BackgroundRemover, "find_local_model", return_value=model_file):
-                with self.assertRaises(BackgroundRemovalError) as ctx:
-                    BackgroundRemover.remove_background_structured(
-                        img_path,
-                        output_dir=self.tmp_dir,
-                        wait_if_busy=False,
-                    )
+            with patch.dict(os.environ, {"U2NET_EXPECTED_SHA256": ""}):
+                with patch.object(BackgroundRemover, "find_local_model", return_value=model_file):
+                    with self.assertRaises(BackgroundRemovalError) as ctx:
+                        BackgroundRemover.remove_background_structured(
+                            img_path,
+                            output_dir=self.tmp_dir,
+                            wait_if_busy=False,
+                        )
             self.assertEqual(ctx.exception.error_code, "BUSY")
         finally:
             BackgroundRemover._infer_semaphore.release()
@@ -218,6 +225,31 @@ class TestBackgroundRemoverV3(unittest.TestCase):
         self.assertFalse(err_res["success"])
         self.assertEqual(err_res["error_code"], "UNSUPPORTED_FORMAT")
         self.assertTrue(len(err_res["error_message"]) > 0)
+
+    def test_main_verify_model_headless_flag(self):
+        import io
+        import sys
+        import main as app_main
+
+        stdout_buf = io.StringIO()
+        stderr_buf = io.StringIO()
+        with patch.object(sys, "argv", ["main.py", "--verify-model"]):
+            with patch.object(BackgroundRemover, "find_local_model", return_value=None):
+                with patch("sys.stderr", stderr_buf):
+                    with self.assertRaises(SystemExit) as ctx:
+                        app_main.main()
+        self.assertEqual(ctx.exception.code, 1)
+        self.assertIn("no encontrado", stderr_buf.getvalue().lower())
+
+        dummy_model = self.tmp_dir / "u2net.onnx"
+        dummy_model.write_bytes(b"ok")
+        with patch.object(sys, "argv", ["main.py", "--verify-model"]):
+            with patch.object(BackgroundRemover, "find_local_model", return_value=dummy_model):
+                with patch.object(BackgroundRemover, "verify_model_integrity", return_value="abc123"):
+                    with patch("core.bg_remover.create_onnx_session", return_value=MagicMock()):
+                        with patch("sys.stdout", stdout_buf):
+                            app_main.main()
+        self.assertIn("[OK] Modelo IA verificado", stdout_buf.getvalue())
 
 
 if __name__ == "__main__":

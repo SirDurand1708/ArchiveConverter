@@ -2,7 +2,9 @@
 ; Requiere Inno Setup 6 (https://jrsoftware.org/isdl.php)
 
 #define MyAppName "ArchiveConverter"
-#define MyAppVersion "1.1.0"
+#ifndef MyAppVersion
+  #define MyAppVersion "1.2.1"
+#endif
 #define MyAppPublisher "ArchiveConverter Open Source"
 #define MyAppURL "https://github.com/SirDurand1708/ArchiveConverter"
 #define MyAppExeName "ArchiveConverter.exe"

@@ -12,7 +12,7 @@ import zipfile
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional, Tuple
 
-APP_VERSION = "1.2.0"
+APP_VERSION = "1.2.1"
 GITHUB_RELEASES_API = "https://api.github.com/repos/SirDurand1708/ArchiveConverter/releases/latest"
 TEMP_FOLDER = Path(tempfile.gettempdir()) / "ArchiveConverter"
 

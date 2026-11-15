@@ -1,4 +1,5 @@
 # -*- mode: python ; coding: utf-8 -*-
+import os
 from PyInstaller.utils.hooks import collect_all, copy_metadata
 from pathlib import Path
 
@@ -6,6 +7,14 @@ datas = [
     ('ui_web/index.html', 'ui_web'),
     ('assets', 'assets'),
 ]
+
+_model_src = Path('models/u2net.onnx')
+if _model_src.is_file():
+    datas.append((str(_model_src), 'models'))
+elif os.environ.get('REQUIRE_OFFLINE_MODEL') == '1':
+    raise FileNotFoundError(
+        "REQUIRE_OFFLINE_MODEL=1 activo, pero falta 'models/u2net.onnx' para el empaquetado Full Offline."
+    )
 
 # Copiar metadatos de paquetes que usan importlib.metadata (resuelve PackageNotFoundError)
 for pkg in ['tqdm', 'numpy', 'jsonschema']:

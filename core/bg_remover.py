@@ -448,6 +448,7 @@ class BackgroundRemover:
 
     SUPPORTED_INPUTS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tiff"}
     DEFAULT_MODEL = "u2net"
+    U2NET_EXPECTED_SHA256 = "8d10d2f3bb75ae3b6d527c77944fc5e7dcd94b29809d47a739a7a728a912b491"
     MAX_DIMENSION = 2048
     MAX_IMAGE_PIXELS = 40_000_000
     WORKER_TIMEOUT_SECONDS = 120.0
@@ -483,6 +484,7 @@ class BackgroundRemover:
             dirs.append(exe_dir / ".u2net")
         else:
             repo_root = Path(__file__).resolve().parent.parent
+            dirs.append(repo_root / "models")
             dirs.append(repo_root / "assets" / "models")
 
         dirs.append(Path.home() / ".u2net")
@@ -550,7 +552,13 @@ class BackgroundRemover:
             with cls._state_lock:
                 cls._model_hash_cache[cache_key] = cached
 
-        expected = (expected_sha256 or os.environ.get("U2NET_EXPECTED_SHA256") or "").strip().lower()
+        if expected_sha256 is not None:
+            expected = expected_sha256.strip().lower()
+        elif "U2NET_EXPECTED_SHA256" in os.environ:
+            expected = os.environ["U2NET_EXPECTED_SHA256"].strip().lower()
+        else:
+            expected = cls.U2NET_EXPECTED_SHA256.strip().lower()
+
         if expected and cached.lower() != expected:
             raise BackgroundRemovalError(
                 "MODEL_CORRUPT",

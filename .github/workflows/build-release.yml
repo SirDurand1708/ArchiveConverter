@@ -9,6 +9,7 @@ on:
 jobs:
   build:
     runs-on: windows-latest
+    timeout-minutes: 25
     permissions:
       contents: write
 
@@ -21,6 +22,32 @@ jobs:
       with:
         python-version: '3.12'
 
+    - name: Extract Single Source of Truth (APP_VERSION & U2NET_EXPECTED_SHA256)
+      id: meta
+      shell: pwsh
+      run: |
+        $metaJson = python -c "import json, re; from pathlib import Path; up = Path('core/updater.py').read_text(encoding='utf-8'); bg = Path('core/bg_remover.py').read_text(encoding='utf-8'); v = re.search(r'APP_VERSION\s*=\s*\"([^\"]+)\"', up).group(1); h = re.search(r'U2NET_EXPECTED_SHA256\s*=\s*\"([0-9a-fA-F]{64})\"', bg).group(1); print(json.dumps({'version': v, 'sha256': h.lower()}))"
+        $meta = $metaJson | ConvertFrom-Json
+        $appVersion = $meta.version
+        $u2netSha = $meta.sha256
+
+        if ($appVersion -notmatch '^\d+\.\d+\.\d+(\.\d+)?$') {
+          Write-Error "APP_VERSION '$appVersion' no cumple formato numérico A.B.C[.D] requerido por Inno Setup."
+          exit 1
+        }
+
+        if ($env:GITHUB_REF -like 'refs/tags/v*') {
+          $tagVersion = $env:GITHUB_REF_NAME -replace '^v', ''
+          if ($tagVersion -ne $appVersion) {
+            Write-Error "Desincronización de versión: tag '$($env:GITHUB_REF_NAME)' != APP_VERSION '$appVersion' en core/updater.py."
+            exit 1
+          }
+        }
+
+        "app_version=$appVersion" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+        "u2net_sha256=$u2netSha" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+        Write-Host "APP_VERSION=$appVersion | U2NET_EXPECTED_SHA256=$u2netSha"
+
     - name: Install Inno Setup
       run: |
         choco install innosetup -y
@@ -31,17 +58,94 @@ jobs:
         pip install -r requirements.txt
         pip install pyinstaller
 
-    - name: Build with PyInstaller
+    - name: Cache u2net.onnx model
+      uses: actions/cache@v4
+      with:
+        path: models/u2net.onnx
+        key: u2net-onnx-${{ steps.meta.outputs.u2net_sha256 }}
+
+    - name: Ensure and unconditionally verify u2net.onnx SHA-256
+      shell: pwsh
+      run: |
+        New-Item -ItemType Directory -Force -Path "models" | Out-Null
+        $modelPath = "models/u2net.onnx"
+        $expectedSha = "${{ steps.meta.outputs.u2net_sha256 }}"
+        $modelUrl = "https://github.com/danielgatis/rembg/releases/download/v0.0.0/u2net.onnx"
+
+        function Test-ModelValid {
+          if (-not (Test-Path $modelPath)) { return $false }
+          $item = Get-Item $modelPath
+          if ($item.Length -lt 104857600) { return $false }
+          $actual = (Get-FileHash -Path $modelPath -Algorithm SHA256).Hash.ToLower()
+          return ($actual -eq $expectedSha)
+        }
+
+        if (-not (Test-ModelValid)) {
+          if (Test-Path $modelPath) {
+            Write-Warning "Caché de u2net.onnx inválida o corrupta; purgando para re-descargar."
+            Remove-Item $modelPath -Force
+          }
+          Write-Host "Descargando u2net.onnx desde fuente oficial..."
+          curl.exe -L --retry 3 --retry-delay 5 --fail -o $modelPath $modelUrl
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "Fallo al descargar u2net.onnx (curl exit=$LASTEXITCODE)."
+            exit 1
+          }
+        }
+
+        if (-not (Test-ModelValid)) {
+          $actual = if (Test-Path $modelPath) { (Get-FileHash -Path $modelPath -Algorithm SHA256).Hash.ToLower() } else { "MISSING" }
+          Write-Error "Verificación SHA-256 fallida para u2net.onnx. Esperado=$expectedSha, Actual=$actual"
+          exit 1
+        }
+        Write-Host "[OK] u2net.onnx verificado (SHA-256=$expectedSha)"
+
+    - name: Run unit test gate (headless, without Office COM suite)
+      shell: pwsh
+      run: |
+        $testFiles = Get-ChildItem -Path tests -Filter "test_*.py" | Where-Object { $_.Name -ne "test_office_converters.py" }
+        foreach ($f in $testFiles) {
+          Write-Host "Running $($f.Name)..."
+          python -m unittest "tests/$($f.Name)" -v
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        }
+
+    - name: Build Full Offline bundle with PyInstaller
+      env:
+        REQUIRE_OFFLINE_MODEL: "1"
       run: |
         pyinstaller ArchiveConverter.spec --noconfirm
 
+    - name: Smoke test frozen executable (--verify-model headless)
+      shell: pwsh
+      run: |
+        .\dist\ArchiveConverter\ArchiveConverter.exe --verify-model
+        if ($LASTEXITCODE -ne 0) {
+          Write-Error "El smoke test --verify-model falló en el binario congelado."
+          exit 1
+        }
+
     - name: Create Portable ZIP
+      shell: pwsh
       run: |
         Compress-Archive -Path dist\ArchiveConverter\* -DestinationPath dist\ArchiveConverter-Portable.zip -Force
 
     - name: Compile Inno Setup Installer
+      shell: pwsh
       run: |
-        & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer\setup.iss
+        & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" "/DMyAppVersion=${{ steps.meta.outputs.app_version }}" installer\setup.iss
+
+    - name: Generate SHA256SUMS.txt
+      shell: pwsh
+      run: |
+        $artifacts = @()
+        $artifacts += Get-Item "dist\ArchiveConverter-Portable.zip"
+        $artifacts += Get-ChildItem "dist_installer\*.exe"
+        $lines = foreach ($a in $artifacts) {
+          $h = (Get-FileHash -Path $a.FullName -Algorithm SHA256).Hash.ToLower()
+          "$h  $($a.Name)"
+        }
+        $lines | Out-File -FilePath "dist\SHA256SUMS.txt" -Encoding utf8
 
     - name: Upload Release Assets
       uses: softprops/action-gh-release@v2
@@ -50,5 +154,6 @@ jobs:
         files: |
           dist/ArchiveConverter-Portable.zip
           dist_installer/*.exe
+          dist/SHA256SUMS.txt
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -71,6 +71,11 @@ def main():
     parser = argparse.ArgumentParser(
         description="ArchiveConverter - Convertidor y caja de herramientas de archivos local y privado."
     )
+    parser.add_argument(
+        "--verify-model",
+        action="store_true",
+        help="Verifica en modo headless la disponibilidad e integridad SHA-256 del modelo IA local y sale.",
+    )
     subparsers = parser.add_subparsers(dest="command", help="Comandos disponibles")
 
     # Subcomando: gui
@@ -123,6 +128,25 @@ def main():
     parser.add_argument("-o", "--output", help="Ruta o nombre del archivo de salida")
 
     args = parser.parse_args()
+
+    if getattr(args, "verify_model", False):
+        try:
+            from core.bg_remover import BackgroundRemover, create_onnx_session
+            model_path = BackgroundRemover.find_local_model()
+            if model_path is None:
+                print(
+                    "[ERROR] Modelo IA (u2net.onnx) no encontrado en el entorno.",
+                    file=sys.stderr,
+                )
+                sys.exit(1)
+            digest = BackgroundRemover.verify_model_integrity(model_path)
+            create_onnx_session(model_path)
+            print(f"[OK] Modelo IA verificado: {model_path} (sha256={digest})")
+            return
+        except Exception as exc:
+            print(f"[ERROR] Verificación de modelo IA fallida: {exc}", file=sys.stderr)
+            sys.exit(1)
+
     from core import ConverterManager, PDFToolkit
     manager = ConverterManager()
 

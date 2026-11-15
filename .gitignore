@@ -38,6 +38,8 @@ tests/sample_files/
 htmlcov/
 *.tmp
 update_*.bat
+models/*.onnx
+assets/models/*.onnx
 
 # IDE
 .vscode/
