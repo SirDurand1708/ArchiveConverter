@@ -140,10 +140,32 @@ class TestBackgroundRemoverV3(unittest.TestCase):
         self.assertTrue(res["ok"])
         self.assertEqual(res["width"], 128)
         self.assertEqual(res["height"], 64)
+        self.assertEqual(res["original_width"], 128)
+        self.assertEqual(res["original_height"], 64)
+        self.assertFalse(res["downscaled"])
         out_p = Path(res["output_path"])
         self.assertTrue(out_p.is_file())
         with Image.open(out_p) as saved:
             self.assertEqual(saved.mode, "RGBA")
+
+    def test_run_inference_reports_downscaled_dimensions(self):
+        in_path = self.tmp_dir / "huge.png"
+        Image.new("RGB", (2600, 1300), (10, 20, 30)).save(in_path)
+        out_dir = self.tmp_dir / "out"
+
+        res = run_inference_in_process(
+            input_path=in_path,
+            out_dir=out_dir,
+            model_path=self.tmp_dir / "dummy.onnx",
+            session=_FakeOnnxSession(),
+            max_dim=2048,
+        )
+        self.assertTrue(res["ok"])
+        self.assertTrue(res["downscaled"])
+        self.assertEqual(res["original_width"], 2600)
+        self.assertEqual(res["original_height"], 1300)
+        self.assertEqual(res["width"], 2048)
+        self.assertEqual(res["height"], 1024)
 
     def test_spawn_worker_handles_corrupt_model_and_crash_isolation(self):
         # Crea un modelo dummy corrupto y una imagen real: el worker spawn real arranca,
@@ -206,6 +228,9 @@ class TestBackgroundRemoverV3(unittest.TestCase):
                 "output_path": str(out_file),
                 "width": 100,
                 "height": 80,
+                "original_width": 3000,
+                "original_height": 2400,
+                "downscaled": True,
                 "error_code": None,
                 "message": None,
             },
@@ -216,6 +241,9 @@ class TestBackgroundRemoverV3(unittest.TestCase):
         self.assertTrue(res["success"])
         self.assertEqual(res["width"], 100)
         self.assertEqual(res["height"], 80)
+        self.assertEqual(res["original_width"], 3000)
+        self.assertEqual(res["original_height"], 2400)
+        self.assertTrue(res["downscaled"])
         self.assertIsNone(res["error_code"])
         self.assertEqual(res["filename"], "foto_nobg.png")
 
@@ -250,6 +278,26 @@ class TestBackgroundRemoverV3(unittest.TestCase):
                         with patch("sys.stdout", stdout_buf):
                             app_main.main()
         self.assertIn("[OK] Modelo IA verificado", stdout_buf.getvalue())
+
+    def test_download_and_install_update_throttles_progress_js(self):
+        api = DesktopAPI()
+        api._window = MagicMock()
+        dummy_zip = self.tmp_dir / "upd.zip"
+        dummy_zip.write_bytes(b"zip")
+
+        def fake_dl(download_url, filename, temp_dir, progress_callback):
+            for i in range(1, 21):
+                progress_callback(i * 100, 2000, i * 0.2)
+            progress_callback(2000, 2000, 100.0)
+            return dummy_zip
+
+        with patch("ui_web.api._core_download_update", side_effect=fake_dl):
+            with patch("ui_web.api._core_apply_update"):
+                res = api.download_and_install_update("https://example.com/upd.zip", "upd.zip")
+
+        self.assertTrue(res["success"])
+        # 20 rapid small ticks (<1% y <150ms) deben reducirse drásticamente por throttling
+        self.assertLess(api._window.evaluate_js.call_count, 10)
 
 
 if __name__ == "__main__":

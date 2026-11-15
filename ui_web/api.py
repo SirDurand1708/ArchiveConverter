@@ -610,6 +610,9 @@ class DesktopAPI:
                 "filename": out_path.name,
                 "width": res.get("width"),
                 "height": res.get("height"),
+                "original_width": res.get("original_width"),
+                "original_height": res.get("original_height"),
+                "downscaled": bool(res.get("downscaled", False)),
                 "error_code": None,
                 "message": None,
                 "error_message": None,
@@ -624,6 +627,9 @@ class DesktopAPI:
                 "filename": None,
                 "width": None,
                 "height": None,
+                "original_width": None,
+                "original_height": None,
+                "downscaled": False,
                 "error_code": err_code,
                 "message": msg,
                 "error_message": msg,
@@ -801,9 +807,18 @@ class DesktopAPI:
         Descarga el paquete de actualización en TEMP_FOLDER reportando progreso a la UI,
         genera `update.bat`, lo lanza en segundo plano y cierra la app para reemplazar el binario.
         """
+        last_emit = [0.0]
+        last_pct = [-1.0]
+
         def on_progress(downloaded: int, total: int, percent: float):
+            now = time.monotonic()
+            is_done = (total > 0 and downloaded >= total) or percent >= 100.0
+            if not is_done and (now - last_emit[0]) < 0.15 and abs(percent - last_pct[0]) < 1.0:
+                return
+            last_emit[0] = now
+            last_pct[0] = percent
             self._safe_evaluate_js(
-                f"if (window.onUpdateDownloadProgress) window.onUpdateDownloadProgress({downloaded}, {total}, {percent});"
+                f"if (window.onUpdateDownloadProgress) window.onUpdateDownloadProgress({int(downloaded)}, {int(total)}, {float(percent):.2f});"
             )
 
         downloaded_path = _core_download_update(

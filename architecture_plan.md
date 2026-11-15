@@ -1,48 +1,57 @@
-# ARCHITECTURE PLAN: CI/CD & Empaquetado Full Offline (`u2net.onnx` + Release v1.2.x)
+# ARCHITECTURE PLAN: Integración Frontend (`ui_web`) para IA Offline, Errores Tipados y Auto-Updater
 
 ## 1. Definición del Problema
-Garantizar que tanto el paquete portable (`ArchiveConverter-Portable.zip`) como el instalador de Windows (`ArchiveConverter-Setup-*.exe`) generados por GitHub Actions incluyan obligatoriamente el modelo `u2net.onnx` (~176 MB) verificado por SHA-256, cumpliendo la promesa **100% Offline** desde el primer arranque sin commitear binarios pesados al repositorio Git.
+Conectar la interfaz web de escritorio ([ui_web/index.html](file:///C:/Users/georg/Documents/GitHub/ArchiveConverter/ui_web/index.html)) con el backend blindado (`DesktopAPI`, `BackgroundRemover` v3 y `updater.py`) para ofrecer:
+- Mensajes de error claros y accionables basados en `error_code` sin usar `alert()`/`confirm()` nativos.
+- Diagnóstico inicial de IA offline (`check_ai_model_status`) y feedback visual de *downscaling* (`<= 2048 px`).
+- Notificación silenciosa de actualizaciones de GitHub Releases con barra de progreso y confirmación no bloqueante.
+- Bloqueo selectivo de botones de acción durante tareas pesadas manteniendo el resto de la interfaz navegable.
 
 ---
 
-## 2. Arquitectura y Flujo de Datos del Pipeline CI/CD
+## 2. Especificaciones Técnicas por Componente
 
-### 2.1 Origen, Descarga y Verificación SHA-256 en CI (`.github/workflows/build-release.yml`)
-1. **Caché de modelo en GitHub Actions (`actions/cache@v4`):**
-   - Cachear `assets/models/u2net.onnx` usando clave basada en el hash SHA-256 oficial esperado (`u2net-onnx-<sha256>`).
-2. **Descarga verificada (si hay *cache miss*):**
-   - Descargar `u2net.onnx` desde la fuente oficial (`https://github.com/danielgatis/rembg/releases/download/v0.0.0/u2net.onnx`) con reintentos ante errores transitorios de red/HTTP.
-   - Validar inmediatamente tamaño mínimo (>100 MB) y **checksum SHA-256 exacto** antes de continuar el build; si el hash no coincide, abortar el workflow.
-3. **Sincronización de versión dinámica:**
-   - Leer `APP_VERSION` desde `core/updater.py` (o extraer de `github.ref_name` en tags `v*`) y pasarlo a Inno Setup (`/DMyAppVersion=<version>`) para evitar desincronización con `#define MyAppVersion` en `installer/setup.iss`.
-4. **Gate de pruebas automatizadas en CI:**
-   - Ejecutar `python -m unittest discover tests -v` antes de compilar con PyInstaller para bloquear releases rotos.
-5. **Smoke test post-empaquetado en CI:**
-   - Verificar antes de comprimir que `dist/ArchiveConverter/_internal/models/u2net.onnx` (o ruta resuelta por `_MEIPASS`) existe y supera 100 MB, y ejecutar un chequeo rápido de disponibilidad del modelo desde el binario o módulo congelado.
+### 2.1 Mapeo Centralizado de Errores y Toasts/Banners (`ui_web/index.html`)
+- **Prohibición de diálogos nativos del navegador (`alert`, `confirm`):** Toda notificación y confirmación usará un componente de **toast/banner inline no bloqueante** con soporte de botón de acción opcional y cierre manual/automático.
+- **Diccionario `AI_ERROR_CATALOG` en JS:** Mapea cada `error_code` devuelto por `DesktopAPI.remove_image_bg`:
+  - `MODEL_MISSING` / `MODEL_CORRUPT`: Mensaje claro sobre el modelo offline + sugerencia de reinstalar/verificar integridad; actualiza la píldora de estado IA a estado de alerta.
+  - `PERMISSION_DENIED`: Mensaje indicando carpeta de solo lectura/protegida + botón de acción **"Elegir otra carpeta"** que dispara `select_folder()` para reintentar.
+  - `ANIMATED_UNSUPPORTED`: Explica que imágenes animadas o multipágina (GIF/WebP/TIFF/APNG) no están soportadas.
+  - `IMAGE_TOO_LARGE`: Explica el límite seguro de memoria (`40 MP`).
+  - `UNSUPPORTED_FORMAT`: Lista los formatos aceptados (`.png`, `.jpg`, `.jpeg`, `.webp`, `.bmp`, `.tiff`).
+  - `BUSY`: Avisa que ya hay una operación IA en curso sin sobrescribir el estado de error crítico.
+  - `WORKER_CRASHED` / `WORKER_TIMEOUT` / `PROCESSING_ERROR`: Mensaje amigable indicando que el proceso aislado protegió la app y botón para reintentar.
+- **Seguridad XSS en JS:** Todos los mensajes, nombres de archivo y versiones insertados en el DOM usarán `textContent` (o helper `escapeHtml()`) en lugar de interpolar HTML sin sanitizar.
 
-### 2.2 Empaquetado en `ArchiveConverter.spec` y `installer/setup.iss`
-1. **`ArchiveConverter.spec` (`--onedir`):**
-   - Mapear explícitamente `assets/models/u2net.onnx` hacia la subcarpeta `models` dentro del bundle (`('assets/models/u2net.onnx', 'models')` cuando exista en disco), para que `sys._MEIPASS / "models" / "u2net.onnx"` sea la ruta primaria determinista en ejecución congelada.
-   - Evitar que `('assets', 'assets')` duplique `assets/models/u2net.onnx` dentro de `_internal/assets/models/` (filtrando o moviendo `models/` fuera de `assets` o excluyendo `assets/models` de la copia genérica de `assets`), evitando duplicar 176 MB dentro del mismo `.zip`/`.exe`.
-2. **`installer/setup.iss`:**
-   - Aceptar `MyAppVersion` sobrescribible desde línea de comandos (`#ifndef MyAppVersion ... #endif`).
-   - Mantener `Source: "..\dist\ArchiveConverter\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs` para incluir `models/u2net.onnx` dentro de `{app}`.
-3. **`.gitignore`:**
-   - Ignorar `assets/models/*.onnx` (y `models/*.onnx`) para impedir que el archivo de 176 MB se suba por error a Git.
+### 2.2 Píldora de Estado IA y Feedback de *Downscaling*
+- **Arranque (`pywebviewready`):**
+  - Invocar `window.pywebview.api.check_ai_model_status()` de forma asíncrona (no bloqueante) al inicializar la UI.
+  - Pintar una **píldora de estado discreta** en la cabecera:
+    - Verde: `"IA Local Lista"` (tooltip con ruta local).
+    - Ámbar/Rojo: `"IA Offline No Disponible"` (sin bloquear el resto de herramientas PDF/Office/Imagen).
+- **Detección exacta de *downscaling* (`core/bg_remover.py` + `ui_web/api.py`):**
+  - En `sanitize_and_load_image` / `run_inference_in_process` y `DesktopAPI.remove_image_bg`, incluir `downscaled: bool`, `original_width`, `original_height`, `width`, `height`.
+  - Cuando `res.downscaled === true`, mostrar un aviso informativo junto al resultado: *"Imagen optimizada automáticamente de {original_width}×{original_height} a {width}×{height} px para proteger la memoria"*.
 
-### 2.3 Sincronización de Integridad en Runtime (`core/bg_remover.py`)
-1. **Hash SHA-256 oficial fijado (`U2NET_SHA256`):**
-   - Definir la constante `U2NET_EXPECTED_SHA256` en `BackgroundRemover` coincidiendo con el hash verificado en CI, de modo que `verify_model_integrity()` detecte corrupción en disco en el equipo del usuario sin depender de variables de entorno externas (permitiendo override solo para tests vía parámetro o env var).
+### 2.3 Auto-Updater en la UI (`ui_web/index.html` + `ui_web/api.py`)
+- **Comprobación silenciosa al arranque (`pywebviewready`):**
+  - Llamar `window.pywebview.api.check_for_updates()` tras cargar la UI (con un pequeño retardo opcional o en segundo plano). Si no hay red o `update_available === false`, no mostrar nada.
+- **Banner sutil + Confirmación + Progreso:**
+  - Si `update_available === true`, mostrar un **banner sutil** en la parte superior con la nueva versión (`tag_name`), notas breves y botón **"Actualizar"**.
+  - Al pulsar **"Actualizar"**, abrir un **diálogo/banner inline de confirmación** (sin `confirm()` nativo) advirtiendo que la app se descargará y reiniciará automáticamente.
+  - Al confirmar, deshabilitar el botón (guardia anti doble-clic), mostrar barra de progreso (`0–100%`) alimentada por `window.onUpdateDownloadProgress(downloaded, total, percent)` y llamar `download_and_install_update(download_url, filename)`.
+  - Si `download_and_install_update` devuelve `{ success: false }`, re-habilitar el botón y mostrar el error en toast inline.
+  - También incluir un botón discreto **"Buscar actualizaciones"** (por ejemplo en el pie/cabecera) para comprobación manual.
 
-### 2.4 Documentación SmartScreen / Windows Defender (`README.md`)
-- Añadir una sección clara explicando que los binarios Open Source sin certificado comercial de *Code Signing* pueden mostrar aviso de Windows SmartScreen ("Windows protegió su PC") y cómo verificar la integridad mediante el hash SHA-256 publicado en cada Release.
+### 2.4 Bloqueo Selectivo de Concurrencia en UI
+- **Estado `isAiOrBatchBusy` en JS:**
+  - Al iniciar `remove_image_bg` o `convert_batch` (`remove_bg`), deshabilitar **únicamente** los botones de acción de conversión/IA afectados (cambiando el texto a *"Procesando en proceso aislado..."* con spinner CSS), **sin bloquear** la navegación entre pestañas, historial ni herramientas PDF independientes.
+  - Garantizar la restauración de los botones dentro de un bloque `try { ... } finally { ... }` incluso si la promesa de PyWebView rechaza o falla.
 
 ---
 
 ## 3. Archivos a Modificar
-- `.github/workflows/build-release.yml`
-- `ArchiveConverter.spec`
-- `installer/setup.iss`
-- `core/bg_remover.py`
-- `.gitignore`
-- `README.md`
+- `core/bg_remover.py` (añadir `downscaled`, `original_width`, `original_height` al resultado estructurado)
+- `ui_web/api.py` (propagar `downscaled`, `original_width`, `original_height` en `remove_image_bg`)
+- `ui_web/index.html` (píldora IA, catálogo `AI_ERROR_CATALOG`, toasts/banners inline, banner/progreso de auto-updater, bloqueo selectivo en `try/finally`)
+- `tests/test_bg_remover_v3.py` (verificar `downscaled`, `original_width`, `original_height` en payload)

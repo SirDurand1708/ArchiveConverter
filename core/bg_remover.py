@@ -132,6 +132,7 @@ def sanitize_and_load_image(
     input_path: Path,
     max_dim: int = 2048,
     max_pixels: int = 40_000_000,
+    meta_out: Optional[Dict[str, Any]] = None,
 ) -> Tuple[Image.Image, Optional[Image.Image]]:
     """
     Pipeline seguro de lectura, validación de cabecera, corrección EXIF,
@@ -156,9 +157,15 @@ def sanitize_and_load_image(
                     pass
 
             img = ImageOps.exif_transpose(img)
+            orig_w, orig_h = img.size
 
             if max(img.size) > max_dim:
                 img.thumbnail((max_dim, max_dim), Image.Resampling.LANCZOS)
+
+            if meta_out is not None:
+                meta_out["original_width"] = int(orig_w)
+                meta_out["original_height"] = int(orig_h)
+                meta_out["downscaled"] = (img.width < orig_w) or (img.height < orig_h)
 
             mode = img.mode
             if mode.startswith("I;16") or mode in ("I", "F"):
@@ -354,10 +361,12 @@ def run_inference_in_process(
     max_pixels: int = 40_000_000,
 ) -> Dict[str, Any]:
     """Ejecuta el pipeline completo (Pillow + onnxruntime + guardado atómico)."""
+    meta: Dict[str, Any] = {}
     rgb_img, prior_alpha = sanitize_and_load_image(
         input_path,
         max_dim=max_dim,
         max_pixels=max_pixels,
+        meta_out=meta,
     )
     if session is None:
         session = create_onnx_session(model_path)
@@ -385,6 +394,9 @@ def run_inference_in_process(
         "output_path": str(out_path),
         "width": rgba_out.width,
         "height": rgba_out.height,
+        "original_width": meta.get("original_width", rgba_out.width),
+        "original_height": meta.get("original_height", rgba_out.height),
+        "downscaled": bool(meta.get("downscaled", False)),
         "error_code": None,
         "message": None,
     }

@@ -3,7 +3,7 @@
 
 #define MyAppName "ArchiveConverter"
 #ifndef MyAppVersion
-  #define MyAppVersion "1.2.1"
+  #define MyAppVersion "1.2.2"
 #endif
 #define MyAppPublisher "ArchiveConverter Open Source"
 #define MyAppURL "https://github.com/SirDurand1708/ArchiveConverter"

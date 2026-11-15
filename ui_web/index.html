@@ -896,6 +896,85 @@
     @keyframes spin {
       to { transform: rotate(360deg); }
     }
+
+    @keyframes indeterminate-bar {
+      0% { transform: translateX(-100%); width: 40%; }
+      50% { transform: translateX(60%); width: 55%; }
+      100% { transform: translateX(220%); width: 40%; }
+    }
+
+    .ai-status-pill {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 11.5px;
+      font-weight: 600;
+      padding: 6px 10px;
+      border-radius: 999px;
+      background: rgba(148, 163, 184, 0.14);
+      color: var(--text-muted);
+      margin-bottom: 8px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .ai-status-pill.ready {
+      background: rgba(16, 185, 129, 0.14);
+      color: #10b981;
+    }
+    .ai-status-pill.missing {
+      background: rgba(239, 68, 68, 0.14);
+      color: #ef4444;
+    }
+
+    .update-banner {
+      display: none;
+      flex-direction: column;
+      gap: 8px;
+      padding: 12px 16px;
+      margin-bottom: 16px;
+      border-radius: 12px;
+      border: 1px solid rgba(59, 130, 246, 0.35);
+      background: rgba(59, 130, 246, 0.08);
+    }
+    .update-banner.active {
+      display: flex;
+    }
+    .update-banner-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+    .update-progress-bar {
+      width: 100%;
+      height: 8px;
+      border-radius: 999px;
+      background: rgba(148, 163, 184, 0.25);
+      overflow: hidden;
+    }
+    .update-progress-fill {
+      height: 100%;
+      width: 0%;
+      background: linear-gradient(90deg, #3b82f6, #10b981);
+      transition: width 0.15s ease;
+    }
+    .update-progress-fill.indeterminate {
+      width: 45%;
+      animation: indeterminate-bar 1.3s infinite ease-in-out;
+    }
+    .toast-action-btn {
+      background: rgba(255, 255, 255, 0.14);
+      color: inherit;
+      border: 1px solid currentColor;
+      border-radius: 6px;
+      padding: 3px 8px;
+      font-size: 11.5px;
+      font-weight: 600;
+      cursor: pointer;
+      white-space: nowrap;
+    }
   </style>
 </head>
 <body>
@@ -960,6 +1039,10 @@
     </div>
 
     <div class="sidebar-footer">
+      <div id="ai-status-pill" class="ai-status-pill">IA Local: verificando...</div>
+      <button class="theme-toggle-btn" id="btn-check-updates" onclick="onManualCheckUpdates()" style="margin-bottom: 8px;">
+        <span>🔄 Buscar actualizaciones</span>
+      </button>
       <button class="theme-toggle-btn" onclick="toggleTheme()">
         <span id="theme-label">🌙 Modo Oscuro</span>
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/></svg>
@@ -969,6 +1052,33 @@
 
   <!-- ================= Main Content ================= -->
   <main class="main-viewport">
+
+    <!-- Banner sutil de Auto-Actualización -->
+    <div id="update-banner" class="update-banner" role="status" aria-live="polite">
+      <div class="update-banner-row">
+        <div style="flex: 1; min-width: 200px;">
+          <strong id="update-banner-title" style="font-size: 13.5px;">Actualización disponible</strong>
+          <div id="update-banner-notes" style="font-size: 12px; color: var(--text-muted); margin-top: 2px; white-space: pre-line;"></div>
+        </div>
+        <div style="display: flex; gap: 8px; align-items: center;">
+          <button id="update-start-btn" class="btn-primary" style="padding: 6px 12px; font-size: 12.5px;" onclick="onPromptUpdateConfirm()">Actualizar</button>
+          <button class="toast-close-btn" onclick="dismissUpdateBanner()" title="Ocultar">✕</button>
+        </div>
+      </div>
+      <div id="update-confirm-box" style="display: none; align-items: center; justify-content: space-between; gap: 10px; padding-top: 8px; border-top: 1px solid var(--border); flex-wrap: wrap;">
+        <span style="font-size: 12.5px;">Se descargará la actualización y se reiniciará la aplicación. ¿Continuar?</span>
+        <div style="display: flex; gap: 8px;">
+          <button id="update-confirm-btn" class="btn-primary" style="padding: 5px 12px; font-size: 12px;" onclick="confirmAndInstallUpdate()">Confirmar y reiniciar</button>
+          <button id="update-cancel-btn" class="btn-secondary" style="padding: 5px 10px; font-size: 12px;" onclick="cancelUpdateConfirm()">Cancelar</button>
+        </div>
+      </div>
+      <div id="update-progress-wrap" style="display: none; flex-direction: column; gap: 4px;">
+        <div class="update-progress-bar">
+          <div id="update-progress-fill" class="update-progress-fill"></div>
+        </div>
+        <span id="update-progress-label" style="font-size: 11.5px; color: var(--text-muted);">Preparando descarga...</span>
+      </div>
+    </div>
 
     <!-- TAB 1: CONVERTIDOR UNIVERSAL -->
     <section id="tab-converter" class="tab-content active">
@@ -1545,8 +1655,8 @@
     let currentBatchFiles = [];
     let chosenBatchFolder = null;
 
-    // ================= Modern Toast Notification System =================
-    function showToast(message, type = 'info', duration = 3500) {
+    // ================= Modern Toast Notification System (XSS-safe) =================
+    function showToast(message, type = 'info', duration = 3500, options = {}) {
       const container = document.getElementById('toast-container');
       if (!container) return;
 
@@ -1564,19 +1674,43 @@
         iconSvg = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#3b82f6" stroke-width="2.5"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>';
       }
 
-      toast.innerHTML = `
-        ${iconSvg}
-        <span style="flex: 1;">${message}</span>
-        <button class="toast-close-btn" onclick="this.parentElement.remove()">✕</button>
-      `;
+      const iconWrap = document.createElement('span');
+      iconWrap.style.display = 'inline-flex';
+      iconWrap.innerHTML = iconSvg;
+
+      const textSpan = document.createElement('span');
+      textSpan.style.flex = '1';
+      textSpan.textContent = String(message ?? '');
+
+      toast.appendChild(iconWrap);
+      toast.appendChild(textSpan);
+
+      if (options.actionLabel && typeof options.onAction === 'function') {
+        const actionBtn = document.createElement('button');
+        actionBtn.className = 'toast-action-btn';
+        actionBtn.textContent = options.actionLabel;
+        actionBtn.onclick = () => {
+          toast.remove();
+          options.onAction();
+        };
+        toast.appendChild(actionBtn);
+      }
+
+      const closeBtn = document.createElement('button');
+      closeBtn.className = 'toast-close-btn';
+      closeBtn.textContent = '✕';
+      closeBtn.onclick = () => toast.remove();
+      toast.appendChild(closeBtn);
 
       container.appendChild(toast);
 
-      setTimeout(() => {
-        toast.style.opacity = '0';
-        toast.style.transform = 'translateX(100%)';
-        setTimeout(() => toast.remove(), 250);
-      }, duration);
+      if (!options.persist && duration > 0) {
+        setTimeout(() => {
+          toast.style.opacity = '0';
+          toast.style.transform = 'translateX(100%)';
+          setTimeout(() => toast.remove(), 250);
+        }, duration);
+      }
     }
 
     // ================= Session History =================
@@ -1781,13 +1915,269 @@
       }
     }
 
-    window.addEventListener('pywebviewready', () => {
+    let _appBootstrapped = false;
+    let isAiOrBatchBusy = false;
+    let _activeAiOpId = 0;
+    let _pendingUpdateInfo = null;
+    let _isUpdatingApp = false;
+
+    const AI_ERROR_CATALOG = {
+      MODEL_MISSING: {
+        message: 'El modelo de IA local (u2net.onnx) no se encontró. Reinstala el paquete completo offline.',
+        persist: true,
+        updatePillMissing: true,
+      },
+      MODEL_CORRUPT: {
+        message: 'El modelo de IA local está dañado o su firma SHA-256 no coincide.',
+        persist: true,
+        updatePillMissing: true,
+      },
+      PERMISSION_DENIED: {
+        message: 'No hay permisos de escritura en la carpeta de destino.',
+        persist: true,
+        actionLabel: 'Elegir otra carpeta',
+        onAction: () => onChooseFolder(),
+      },
+      ANIMATED_UNSUPPORTED: {
+        message: 'Las imágenes animadas o multipágina (GIF, WebP animado, APNG, TIFF) no son compatibles.',
+        persist: false,
+      },
+      IMAGE_TOO_LARGE: {
+        message: 'La imagen supera el límite seguro de 40 megapíxeles.',
+        persist: false,
+      },
+      UNSUPPORTED_FORMAT: {
+        message: 'Formato no compatible. Usa PNG, JPG, JPEG, WEBP, BMP o TIFF.',
+        persist: false,
+      },
+      BUSY: {
+        message: 'Ya hay una operación de IA en curso. Espera unos segundos.',
+        persist: false,
+      },
+      WORKER_CRASHED: {
+        message: 'El motor de IA se detuvo de forma aislada para proteger la aplicación. Puedes reintentar.',
+        persist: true,
+        actionLabel: 'Reintentar',
+        onAction: () => onRemoveBackground(),
+      },
+      WORKER_TIMEOUT: {
+        message: 'La operación de IA excedió el tiempo límite (120 s).',
+        persist: true,
+      },
+      PROCESSING_ERROR: {
+        message: 'Ocurrió un error al procesar la imagen en el motor local.',
+        persist: false,
+      },
+    };
+
+    function setAiOrBatchBusy(busy, opId, triggerBtn = null, triggerSpan = null, busyLabel = 'Procesando en proceso aislado...') {
+      const targetIds = ['ai-remove-bg-btn', 'batch-start-btn', 'conv-start-btn'];
+      if (busy) {
+        isAiOrBatchBusy = true;
+        for (const id of targetIds) {
+          const el = document.getElementById(id);
+          if (!el) continue;
+          if (!el.dataset.originalLabel) {
+            el.dataset.originalLabel = el.textContent.trim();
+          }
+          el.disabled = true;
+        }
+        if (triggerSpan) {
+          if (!triggerSpan.dataset.originalLabel) {
+            triggerSpan.dataset.originalLabel = triggerSpan.textContent.trim();
+          }
+          triggerSpan.textContent = '';
+          const spinner = document.createElement('div');
+          spinner.className = 'spinner';
+          triggerSpan.appendChild(spinner);
+          triggerSpan.appendChild(document.createTextNode(' ' + busyLabel));
+        }
+        return;
+      }
+
+      if (opId !== _activeAiOpId) return;
+      isAiOrBatchBusy = false;
+      for (const id of targetIds) {
+        const el = document.getElementById(id);
+        if (!el) continue;
+        el.disabled = false;
+      }
+      if (triggerSpan && triggerSpan.dataset.originalLabel) {
+        triggerSpan.textContent = triggerSpan.dataset.originalLabel;
+      }
+    }
+
+    async function refreshAiStatusPill() {
+      const pill = document.getElementById('ai-status-pill');
+      if (!pill || !window.pywebview?.api?.check_ai_model_status) return;
+      try {
+        const status = await window.pywebview.api.check_ai_model_status();
+        pill.classList.remove('ready', 'missing');
+        if (status && status.available) {
+          pill.classList.add('ready');
+          pill.textContent = '● IA Local Lista';
+          pill.title = String(status.model_path || status.message || '');
+        } else {
+          pill.classList.add('missing');
+          pill.textContent = '● IA Offline No Disponible';
+          pill.title = String((status && status.message) || 'Modelo u2net.onnx no encontrado');
+        }
+      } catch (e) {
+        pill.classList.remove('ready');
+        pill.classList.add('missing');
+        pill.textContent = '● Estado IA desconocido';
+        pill.title = String(e || '');
+      }
+    }
+
+    async function checkAppUpdates(manual = false) {
+      if (!window.pywebview?.api?.check_for_updates) return;
+      const checkBtn = document.getElementById('btn-check-updates');
+      if (manual && checkBtn) {
+        if (!checkBtn.dataset.originalLabel) {
+          checkBtn.dataset.originalLabel = checkBtn.textContent.trim();
+        }
+        checkBtn.disabled = true;
+        checkBtn.textContent = '⏳ Buscando...';
+      }
+      try {
+        const info = await window.pywebview.api.check_for_updates();
+        const hasValidAsset = Boolean(
+          info && info.update_available && info.download_url && info.filename
+        );
+        if (hasValidAsset) {
+          _pendingUpdateInfo = info;
+          const banner = document.getElementById('update-banner');
+          const title = document.getElementById('update-banner-title');
+          const notes = document.getElementById('update-banner-notes');
+          if (title) title.textContent = `Nueva versión disponible: ${String(info.tag_name || '')}`;
+          if (notes) notes.textContent = String(info.notes || 'Mejoras de estabilidad y rendimiento.');
+          if (banner) banner.classList.add('active');
+        } else if (manual) {
+          showToast('Ya estás en la última versión disponible.', 'info');
+        }
+      } catch (e) {
+        if (manual) {
+          showToast('No se pudo comprobar actualizaciones. Verifica tu conexión.', 'warning');
+        }
+      } finally {
+        if (manual && checkBtn) {
+          checkBtn.disabled = false;
+          checkBtn.textContent = checkBtn.dataset.originalLabel || '🔄 Buscar actualizaciones';
+        }
+      }
+    }
+
+    function onManualCheckUpdates() {
+      checkAppUpdates(true);
+    }
+
+    function dismissUpdateBanner() {
+      if (_isUpdatingApp) return;
+      const banner = document.getElementById('update-banner');
+      if (banner) banner.classList.remove('active');
+    }
+
+    function onPromptUpdateConfirm() {
+      if (!_pendingUpdateInfo || !_pendingUpdateInfo.download_url || !_pendingUpdateInfo.filename) return;
+      if (isAiOrBatchBusy) {
+        showToast('Espera a que termine la operación actual antes de actualizar.', 'warning');
+        return;
+      }
+      const box = document.getElementById('update-confirm-box');
+      if (box) box.style.display = 'flex';
+    }
+
+    function cancelUpdateConfirm() {
+      if (_isUpdatingApp) return;
+      const box = document.getElementById('update-confirm-box');
+      if (box) box.style.display = 'none';
+    }
+
+    window.onUpdateDownloadProgress = function(downloaded, total, percent) {
+      const fill = document.getElementById('update-progress-fill');
+      const label = document.getElementById('update-progress-label');
+      if (!fill || !label) return;
+
+      if (!Number.isFinite(total) || total <= 0) {
+        fill.classList.add('indeterminate');
+        const mb = Number.isFinite(downloaded) ? (downloaded / (1024 * 1024)).toFixed(1) : '0.0';
+        label.textContent = `Descargando actualización (${mb} MB)...`;
+        return;
+      }
+
+      fill.classList.remove('indeterminate');
+      const clamped = Number.isFinite(percent) ? Math.max(0, Math.min(100, percent)) : 0;
+      fill.style.width = clamped.toFixed(1) + '%';
+      label.textContent = clamped >= 100
+        ? 'Descarga completa. Preparando reinicio...'
+        : `Descargando actualización: ${clamped.toFixed(0)}%`;
+    };
+
+    async function confirmAndInstallUpdate() {
+      if (_isUpdatingApp) return;
+      if (isAiOrBatchBusy) {
+        showToast('Espera a que termine la operación actual antes de actualizar.', 'warning');
+        return;
+      }
+      if (!_pendingUpdateInfo || !_pendingUpdateInfo.download_url || !_pendingUpdateInfo.filename) {
+        showToast('Información de actualización incompleta.', 'error');
+        return;
+      }
+
+      const confirmBtn = document.getElementById('update-confirm-btn');
+      const cancelBtn = document.getElementById('update-cancel-btn');
+      const startBtn = document.getElementById('update-start-btn');
+      const progressWrap = document.getElementById('update-progress-wrap');
+
+      _isUpdatingApp = true;
+      if (confirmBtn) {
+        if (!confirmBtn.dataset.originalLabel) confirmBtn.dataset.originalLabel = confirmBtn.textContent.trim();
+        confirmBtn.disabled = true;
+        confirmBtn.textContent = 'Descargando...';
+      }
+      if (cancelBtn) cancelBtn.disabled = true;
+      if (startBtn) startBtn.disabled = true;
+      if (progressWrap) progressWrap.style.display = 'flex';
+
+      try {
+        const res = await window.pywebview.api.download_and_install_update(
+          _pendingUpdateInfo.download_url,
+          _pendingUpdateInfo.filename
+        );
+        if (res && res.success) {
+          if (confirmBtn) confirmBtn.textContent = 'Instalando y reiniciando...';
+          return;
+        }
+        throw new Error((res && res.error_message) || 'Fallo al instalar la actualización.');
+      } catch (err) {
+        _isUpdatingApp = false;
+        if (confirmBtn) {
+          confirmBtn.disabled = false;
+          confirmBtn.textContent = confirmBtn.dataset.originalLabel || 'Confirmar y reiniciar';
+        }
+        if (cancelBtn) cancelBtn.disabled = false;
+        if (startBtn) startBtn.disabled = false;
+        showToast(String(err.message || err), 'error', 0, { persist: true });
+      }
+    }
+
+    function bootstrapApp() {
+      if (_appBootstrapped || !window.pywebview?.api) return;
+      _appBootstrapped = true;
       checkInitialFile();
       refreshHistoryUI();
+      refreshAiStatusPill();
+      setTimeout(() => checkAppUpdates(false), 1200);
       if ('Notification' in window && Notification.permission === 'default') {
         Notification.requestPermission();
       }
-    });
+    }
+
+    window.addEventListener('pywebviewready', bootstrapApp);
+    if (window.pywebview?.api) {
+      bootstrapApp();
+    }
 
     // Real-Time Batch Progress Handler (invoked by backend Python threads)
     window.onBatchProgressUpdate = function(current, total, filename) {
@@ -1991,31 +2381,67 @@
 
     async function onRemoveBackground() {
       if (!currentConvertFile) return;
+      if (isAiOrBatchBusy) {
+        showToast(AI_ERROR_CATALOG.BUSY.message, 'warning');
+        return;
+      }
+
       const btn = document.getElementById('ai-remove-bg-btn');
       const textSpan = document.getElementById('ai-remove-text');
+      const opId = ++_activeAiOpId;
+      let receivedBusy = false;
 
-      btn.disabled = true;
-      textSpan.innerHTML = '<div class="spinner"></div> Quitando fondo con IA...';
+      setAiOrBatchBusy(true, opId, btn, textSpan, 'Procesando en proceso aislado...');
       hideStatus('conv-status');
 
       try {
         const res = await window.pywebview.api.remove_image_bg(currentConvertFile.path, chosenOutputFolder);
-        if (res.success) {
+        if (res && (res.ok || res.success)) {
           lastResultPath = res.output_path;
-          showStatus('conv-status', `✔ ¡Fondo eliminado con éxito! Guardado en: ${res.filename}`, 'success');
-          showToast(`¡Fondo eliminado con éxito! Guardado en ${res.filename}`, 'success');
-          triggerDesktopNotification('ArchiveConverter', `¡Fondo eliminado con éxito! Guardado en: ${res.filename}`);
+          let successMsg = `¡Fondo eliminado con éxito! Guardado en: ${res.filename}`;
+          const validDims = (
+            res.downscaled === true
+            && typeof res.original_width === 'number' && Number.isFinite(res.original_width)
+            && typeof res.original_height === 'number' && Number.isFinite(res.original_height)
+            && typeof res.width === 'number' && Number.isFinite(res.width)
+            && typeof res.height === 'number' && Number.isFinite(res.height)
+          );
+          if (validDims) {
+            successMsg += ` (Imagen optimizada de ${res.original_width}×${res.original_height} a ${res.width}×${res.height} px)`;
+          }
+          showStatus('conv-status', `✔ ${successMsg}`, 'success');
+          showToast(successMsg, 'success');
+          triggerDesktopNotification('ArchiveConverter', successMsg);
           refreshHistoryUI();
         } else {
-          showStatus('conv-status', `✖ Error al quitar fondo: ${res.error_message}`, 'error');
-          showToast(`Error al quitar fondo: ${res.error_message}`, 'error');
+          const code = (res && res.error_code) || 'PROCESSING_ERROR';
+          if (code === 'BUSY') receivedBusy = true;
+          const meta = AI_ERROR_CATALOG[code] || AI_ERROR_CATALOG.PROCESSING_ERROR;
+          const detail = (res && (res.message || res.error_message)) || meta.message;
+          if (meta.updatePillMissing) {
+            const pill = document.getElementById('ai-status-pill');
+            if (pill) {
+              pill.classList.remove('ready');
+              pill.classList.add('missing');
+              pill.textContent = '● IA Offline No Disponible';
+              pill.title = String(detail);
+            }
+          }
+          showStatus('conv-status', `✖ ${meta.message}`, 'error');
+          showToast(detail || meta.message, code === 'BUSY' ? 'warning' : 'error', 4500, {
+            persist: Boolean(meta.persist),
+            actionLabel: meta.actionLabel || null,
+            onAction: meta.onAction || null,
+          });
         }
       } catch (err) {
-        showStatus('conv-status', `✖ Error inesperado: ${err}`, 'error');
-        showToast(`Error inesperado: ${err}`, 'error');
+        const errMsg = String(err?.message || err || 'Error inesperado');
+        showStatus('conv-status', `✖ Error inesperado: ${errMsg}`, 'error');
+        showToast(`Error inesperado: ${errMsg}`, 'error', 0, { persist: true });
       } finally {
-        btn.disabled = false;
-        textSpan.textContent = 'Quitar Fondo con IA (Generar PNG Transparente)';
+        if (!receivedBusy) {
+          setAiOrBatchBusy(false, opId, btn, textSpan);
+        }
       }
     }
 
