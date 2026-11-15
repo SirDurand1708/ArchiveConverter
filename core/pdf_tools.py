@@ -1,3 +1,6 @@
+import uuid
+import tempfile
+import time
 from pathlib import Path
 from typing import List, Optional, Sequence
 
@@ -10,6 +13,48 @@ except ImportError:
 def _require_pymupdf():
     if pymupdf is None:
         raise ImportError("El módulo 'pymupdf' no está disponible. Ejecuta: pip install pymupdf")
+
+
+def create_isolated_temp_file(prefix: str = "pdf_tmp", ext: str = ".pdf", directory: Optional[Path] = None) -> Path:
+    """
+    Genera una ruta temporal única basada en UUID corto y marca de tiempo de alta precisión
+    para garantizar aislamiento total en ejecuciones concurrentes.
+    """
+    base_dir = Path(directory) if directory else Path(tempfile.gettempdir()) / "ArchiveConverter" / "temp"
+    base_dir.mkdir(parents=True, exist_ok=True)
+    uid = uuid.uuid4().hex[:8]
+    ts = time.time_ns()
+    return base_dir / f"{prefix}_{ts}_{uid}{ext}"
+
+
+def _safe_save_pdf(doc, target_path: Path, **kwargs) -> Path:
+    """
+    Guarda un documento PDF utilizando un archivo temporal aislado con UUID corto
+    y reemplazo atómico para evitar colisiones de escritura y corrupción de archivos en hilos concurrentes.
+    """
+    target_path = Path(target_path).resolve()
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    uid = uuid.uuid4().hex[:8]
+    temp_target = target_path.parent / f".tmp_{target_path.stem}_{uid}.tmp"
+    try:
+        doc.save(str(temp_target), **kwargs)
+        # Si el documento de origen coincide con target_path, cerramos el doc antes del reemplazo en Windows
+        is_same_file = False
+        if hasattr(doc, 'name') and doc.name:
+            try:
+                is_same_file = (Path(doc.name).resolve() == target_path)
+            except Exception:
+                is_same_file = False
+        if is_same_file:
+            doc.close()
+        temp_target.replace(target_path)
+    finally:
+        if temp_target.exists():
+            try:
+                temp_target.unlink(missing_ok=True)
+            except Exception:
+                pass
+    return target_path
 
 
 class PDFToolkit:
@@ -40,7 +85,7 @@ class PDFToolkit:
                         raise PermissionError(f"El archivo '{file_p.name}' está protegido con contraseña. Desbloquéalo primero.")
                     merged.insert_pdf(doc)
             
-            merged.save(str(out_p))
+            _safe_save_pdf(merged, out_p)
             return out_p
         finally:
             merged.close()
@@ -62,7 +107,7 @@ class PDFToolkit:
                 try:
                     new_doc.insert_pdf(doc, from_page=page_num, to_page=page_num)
                     page_path = out_d / f"{in_p.stem}_pagina_{page_num + 1}.pdf"
-                    new_doc.save(str(page_path))
+                    _safe_save_pdf(new_doc, page_path)
                     generated_files.append(page_path)
                 finally:
                     new_doc.close()
@@ -94,7 +139,7 @@ class PDFToolkit:
             try:
                 # pymupdf es 0-indexed
                 new_doc.insert_pdf(doc, from_page=from_page - 1, to_page=to_page - 1)
-                new_doc.save(str(out_p))
+                _safe_save_pdf(new_doc, out_p)
                 return out_p
             finally:
                 new_doc.close()
@@ -112,9 +157,10 @@ class PDFToolkit:
         with pymupdf.open(str(in_p)) as doc:
             if doc.is_encrypted:
                 raise PermissionError(f"El archivo '{in_p.name}' está protegido con contraseña. Desbloquéalo primero.")
-            doc.save(
-                str(out_p),
-                garbage=4,   # Nivel máximo de eliminación de objetos huérfanos/inutilizados
+            _safe_save_pdf(
+                doc,
+                out_p,
+                garbage=4,    # Nivel máximo de eliminación de objetos huérfanos/inutilizados
                 deflate=True, # Comprime flujos de datos sin pérdida
                 clean=True    # Sanitiza y optimiza contenido de página
             )
@@ -143,7 +189,17 @@ class PDFToolkit:
                     image_ext = "".join(c for c in raw_ext if c.isalnum()) or "png"
                     
                     img_file = out_d / f"img_pag_{page_idx + 1}_{img_idx + 1}.{image_ext}"
-                    img_file.write_bytes(image_bytes)
+                    uid = uuid.uuid4().hex[:8]
+                    temp_img = out_d / f".tmp_img_{uid}_{page_idx + 1}_{img_idx + 1}.tmp"
+                    try:
+                        temp_img.write_bytes(image_bytes)
+                        temp_img.replace(img_file)
+                    finally:
+                        if temp_img.exists():
+                            try:
+                                temp_img.unlink(missing_ok=True)
+                            except Exception:
+                                pass
                     extracted_paths.append(img_file)
 
         return extracted_paths
@@ -169,7 +225,7 @@ class PDFToolkit:
                 raise PermissionError(f"El archivo '{in_p.name}' está protegido con contraseña. Desbloquéalo primero.")
             for page in doc:
                 page.set_rotation((page.rotation + degrees) % 360)
-            doc.save(str(out_p))
+            _safe_save_pdf(doc, out_p)
         return out_p
 
     @staticmethod
@@ -187,8 +243,9 @@ class PDFToolkit:
         out_p.parent.mkdir(parents=True, exist_ok=True)
 
         with pymupdf.open(str(in_p)) as doc:
-            doc.save(
-                str(out_p),
+            _safe_save_pdf(
+                doc,
+                out_p,
                 encryption=pymupdf.PDF_ENCRYPT_AES_256,
                 user_pw=user_password,
                 owner_pw=owner_password or user_password
@@ -214,7 +271,7 @@ class PDFToolkit:
                 if not auth_ok:
                     raise PermissionError("Contraseña incorrecta para el archivo PDF.")
             # Guardar sin encriptación
-            doc.save(str(out_p))
+            _safe_save_pdf(doc, out_p)
         return out_p
 
     @staticmethod
@@ -248,7 +305,7 @@ class PDFToolkit:
                     fill_opacity=opacity,
                     morph=(p, pymupdf.Matrix(rotate))
                 )
-            doc.save(str(out_p))
+            _safe_save_pdf(doc, out_p)
         return out_p
 
     @staticmethod
@@ -298,6 +355,6 @@ class PDFToolkit:
 
             sig_rect = pymupdf.Rect(x0, y0, x0 + width, y0 + height)
             page.insert_image(sig_rect, filename=str(sig_p), overlay=True)
-            doc.save(str(out_p))
+            _safe_save_pdf(doc, out_p)
 
         return out_p

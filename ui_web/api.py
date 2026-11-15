@@ -9,6 +9,8 @@ import threading
 import concurrent.futures
 import json
 import io
+import uuid
+import time
 from pathlib import Path
 from typing import List, Optional, Dict, Any, Set
 try:
@@ -16,9 +18,47 @@ try:
 except ImportError:
     webview = None
 
-from core import ConverterManager, PDFToolkit, BackgroundRemover, ImageConverter
+from core import (
+    ConverterManager,
+    PDFToolkit,
+    BackgroundRemover,
+    ImageConverter,
+    APP_VERSION,
+    check_for_updates as _core_check_for_updates,
+    download_update as _core_download_update,
+    apply_update_and_restart as _core_apply_update,
+)
 
 TEMP_FOLDER = Path(tempfile.gettempdir()) / "ArchiveConverter"
+HEAVY_AI_FORMATS = {"remove_bg", "sin_fondo", "no_bg", "bg_remove"}
+_AI_EXECUTION_LOCK = threading.Lock()
+
+# Nombres de dispositivo reservados en Windows que provocan fallos fatales de E/S
+_WINDOWS_RESERVED_NAMES = (
+    {"CON", "PRN", "AUX", "NUL"}
+    | {f"COM{i}" for i in range(1, 10)}
+    | {f"LPT{i}" for i in range(1, 10)}
+)
+
+
+def sanitize_filename(filename: str, fallback: str = "archivo.bin") -> str:
+    """
+    Sanitiza nombres de archivo contra Path Traversal, caracteres ilegales en Windows
+    y nombres de dispositivo reservados (CON, PRN, AUX, NUL, COM1-COM9, LPT1-LPT9).
+    """
+    raw_name = Path(str(filename or "")).name
+    clean_chars = "".join(c for c in raw_name if c not in '<>:"/\\|?*' and ord(c) >= 32)
+    # En Windows, los espacios o puntos al final del nombre son inválidos
+    safe_name = clean_chars.strip(" .")
+    if not safe_name:
+        return fallback
+
+    p = Path(safe_name)
+    stem_upper = p.stem.upper()
+    if stem_upper in _WINDOWS_RESERVED_NAMES or safe_name.upper() in _WINDOWS_RESERVED_NAMES:
+        safe_name = f"safe_{safe_name}"
+
+    return safe_name
 
 
 def cleanup_temp_files():
@@ -211,13 +251,15 @@ class DesktopAPI:
             temp_dir = (Path(tempfile.gettempdir()) / "ArchiveConverter").resolve()
             temp_dir.mkdir(parents=True, exist_ok=True)
 
-            # Sanitización contra Path Traversal y caracteres peligrosos
-            safe_name = Path(filename).name
-            safe_name = "".join(c for c in safe_name if c not in '<>:"/\\|?*').strip()
-            if not safe_name:
-                safe_name = "archivo_arrastrado.bin"
+            # Sanitización contra Path Traversal, caracteres peligrosos y nombres reservados de Windows
+            safe_name = sanitize_filename(filename, fallback="archivo_arrastrado.bin")
 
-            temp_file = (temp_dir / safe_name).resolve()
+            # Aislamiento por subcarpeta única con UUID para evitar colisiones concurrentes
+            uid = uuid.uuid4().hex[:8]
+            drop_subfolder = temp_dir / f"drop_{uid}"
+            drop_subfolder.mkdir(parents=True, exist_ok=True)
+
+            temp_file = (drop_subfolder / safe_name).resolve()
             if not temp_file.is_relative_to(temp_dir):
                 raise ValueError("Ruta de archivo no autorizada.")
 
@@ -226,6 +268,25 @@ class DesktopAPI:
         except Exception as e:
             print(f"[ERROR] Error al procesar archivo arrastrado: {e}")
             return None
+
+    @staticmethod
+    def create_temp_path(filename: str, prefix: str = "temp") -> Path:
+        """Crea una ruta de archivo temporal aislada con UUID corto para operaciones concurrentes."""
+        temp_dir = TEMP_FOLDER.resolve()
+        temp_dir.mkdir(parents=True, exist_ok=True)
+        safe_name = sanitize_filename(filename, fallback="temp.bin")
+        uid = uuid.uuid4().hex[:8]
+        sub = temp_dir / f"{prefix}_{uid}"
+        sub.mkdir(parents=True, exist_ok=True)
+        return (sub / safe_name).resolve()
+
+    def _safe_evaluate_js(self, script: str) -> None:
+        """Ejecuta JS en la ventana PyWebView de forma segura si está disponible y abierta."""
+        if self._window:
+            try:
+                self._window.evaluate_js(script)
+            except Exception:
+                pass
 
     # ================= Dialogs =================
 
@@ -355,51 +416,115 @@ class DesktopAPI:
         orientation: str = "auto"
     ) -> Dict[str, Any]:
         """
-        Ejecuta la conversión por lotes (batch) en paralelo con ThreadPoolExecutor,
-        acelerando hasta 4x la velocidad y reportando progreso en tiempo real.
+        Ejecuta la conversión por lotes (batch) con ThreadPoolExecutor:
+        - Conversiones ligeras de documentos/imágenes: hasta 4 hilos paralelos.
+        - Tareas pesadas de IA (remove_bg): estrictamente secuencial (max_workers=1)
+          para evitar agotar la memoria RAM del sistema.
+        Garantiza inicialización/desinicialización de COM por cada hilo de trabajo
+        y aislamiento de nombres de archivos con UUID para evitar colisiones.
         """
+        if not file_paths:
+            return {
+                "total": 0,
+                "success_count": 0,
+                "failed_count": 0,
+                "output_dir": str(output_dir or ""),
+                "success_list": [],
+                "failed_list": [],
+            }
+
+        is_heavy_ai = target_format.lower().strip(".") in HEAVY_AI_FORMATS
         success_list = []
         failed_list = []
         out_d = Path(output_dir) if output_dir else Path(file_paths[0]).parent
+        out_d.mkdir(parents=True, exist_ok=True)
         total = len(file_paths)
         completed_lock = threading.Lock()
+        allocated_names_lock = threading.Lock()
+        allocated_names: Set[str] = set()
         completed_count = 0
+
+        def get_unique_output_path(in_p: Path) -> Path:
+            if is_heavy_ai:
+                target_ext = ".png"
+                base_name = f"{in_p.stem}_sin_fondo{target_ext}"
+            else:
+                target_ext = f".{target_format.lower().lstrip('.')}"
+                base_name = f"{in_p.stem}{target_ext}"
+                if base_name == in_p.name:
+                    base_name = f"{in_p.stem}_convertido{target_ext}"
+
+            with allocated_names_lock:
+                cand = out_d / base_name
+                if base_name in allocated_names or cand.exists():
+                    uid = uuid.uuid4().hex[:8]
+                    stem_part = f"{in_p.stem}_sin_fondo" if is_heavy_ai else in_p.stem
+                    base_name = f"{stem_part}_{uid}{target_ext}"
+                    cand = out_d / base_name
+                allocated_names.add(base_name)
+                return cand
 
         def process_single(p_str: str):
             nonlocal completed_count
             in_p = Path(p_str)
-            target_ext = f".{target_format.lower()}"
-            out_target = out_d / f"{in_p.stem}{target_ext}"
-            if out_target == in_p:
-                out_target = out_d / f"{in_p.stem}_convertido{target_ext}"
+            out_target = get_unique_output_path(in_p)
 
-            res = self.manager.convert_file(
-                input_path=in_p,
-                target_format=target_format,
-                output_path=out_target,
-                auto_fit=auto_fit,
-                orientation=orientation
-            )
+            if is_heavy_ai:
+                t0 = time.perf_counter()
+                try:
+                    with _AI_EXECUTION_LOCK:
+                        out_res = BackgroundRemover.remove_background(in_p, out_target)
+                    elapsed = round(time.perf_counter() - t0, 3)
+                    ok, detail, out_path_str = True, out_res.name, str(out_res)
+                except Exception as err:
+                    elapsed = round(time.perf_counter() - t0, 3)
+                    ok, detail, out_path_str = False, str(err), None
+            else:
+                com_initialized = False
+                try:
+                    import pythoncom
+                    pythoncom.CoInitialize()
+                    com_initialized = True
+                except Exception:
+                    pass
+
+                try:
+                    res = self.manager.convert_file(
+                        input_path=in_p,
+                        target_format=target_format,
+                        output_path=out_target,
+                        auto_fit=auto_fit,
+                        orientation=orientation
+                    )
+                finally:
+                    if com_initialized:
+                        try:
+                            import pythoncom
+                            import gc
+                            gc.collect()
+                            pythoncom.CoUninitialize()
+                        except Exception:
+                            pass
+
+                elapsed = res.elapsed_seconds
+                if res.success:
+                    ok, detail, out_path_str = True, res.output_path.name, str(res.output_path)
+                else:
+                    ok, detail, out_path_str = False, res.error_message, None
 
             with completed_lock:
                 completed_count += 1
                 curr_done = completed_count
 
-            if self._window:
-                try:
-                    safe_name = json.dumps(in_p.name)
-                    self._window.evaluate_js(
-                        f"if (window.onBatchProgressUpdate) window.onBatchProgressUpdate({curr_done}, {total}, {safe_name});"
-                    )
-                except Exception:
-                    pass
+            safe_name = json.dumps(in_p.name)
+            self._safe_evaluate_js(
+                f"if (window.onBatchProgressUpdate) window.onBatchProgressUpdate({curr_done}, {total}, {safe_name});"
+            )
 
-            if res.success:
-                return True, in_p.name, res.output_path.name, res.elapsed_seconds, str(res.output_path)
-            else:
-                return False, in_p.name, res.error_message, res.elapsed_seconds, None
+            return ok, in_p.name, detail, elapsed, out_path_str
 
-        max_workers = min(4, max(1, os.cpu_count() or 2))
+        # Restringir tareas pesadas de IA a ejecución estrictamente secuencial (1 a la vez)
+        max_workers = 1 if is_heavy_ai else min(4, max(1, os.cpu_count() or 2))
         with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
             results = list(executor.map(process_single, file_paths))
 
@@ -462,23 +587,51 @@ class DesktopAPI:
 
     # ================= Removedor de Fondos (IA) =================
 
+    def check_ai_model_status(self) -> Dict[str, Any]:
+        """Comprueba si el modelo local de IA (u2net.onnx) está disponible."""
+        return BackgroundRemover.check_model_availability()
+
     def remove_image_bg(self, file_path: str, output_dir: Optional[str] = None) -> Dict[str, Any]:
-        """Elimina el fondo de una imagen usando IA en local."""
+        """Elimina el fondo de una imagen usando IA en local de forma aislada y secuencial."""
         try:
             in_p = Path(file_path)
-            out_target = None
-            if output_dir:
-                out_target = Path(output_dir) / f"{in_p.stem}_sin_fondo.png"
+            with _AI_EXECUTION_LOCK:
+                res = BackgroundRemover.remove_background_structured(
+                    input_path=in_p,
+                    output_dir=output_dir,
+                )
 
-            res = BackgroundRemover.remove_background(in_p, out_target)
-            self._add_history(res.name, str(res), "Quitar Fondo IA")
+            out_path = Path(res["output_path"])
+            self._add_history(out_path.name, str(out_path), "Quitar Fondo IA")
             return {
+                "ok": True,
                 "success": True,
-                "output_path": str(res),
-                "filename": res.name
+                "output_path": str(out_path),
+                "filename": out_path.name,
+                "width": res.get("width"),
+                "height": res.get("height"),
+                "error_code": None,
+                "message": None,
+                "error_message": None,
             }
         except Exception as e:
-            return {"success": False, "error_message": str(e)}
+            err_code = getattr(e, "error_code", "PROCESSING_ERROR")
+            msg = str(e)
+            return {
+                "ok": False,
+                "success": False,
+                "output_path": None,
+                "filename": None,
+                "width": None,
+                "height": None,
+                "error_code": err_code,
+                "message": msg,
+                "error_message": msg,
+            }
+
+    def remove_batch_bg(self, file_paths: List[str], output_dir: Optional[str] = None) -> Dict[str, Any]:
+        """Elimina el fondo de múltiples imágenes de forma estrictamente secuencial para proteger la RAM."""
+        return self.convert_batch(file_paths=file_paths, target_format="remove_bg", output_dir=output_dir)
 
     # ================= Caja de Herramientas PDF =================
 
@@ -486,12 +639,12 @@ class DesktopAPI:
         try:
             paths = [Path(p) for p in file_paths]
             dest_dir = Path(output_dir) if output_dir else paths[0].parent
+            dest_dir.mkdir(parents=True, exist_ok=True)
             dest_file = dest_dir / "documentos_unidos.pdf"
             
-            counter = 1
-            while dest_file.exists():
-                dest_file = dest_dir / f"documentos_unidos_{counter}.pdf"
-                counter += 1
+            if dest_file.exists():
+                uid = uuid.uuid4().hex[:8]
+                dest_file = dest_dir / f"documentos_unidos_{uid}.pdf"
 
             res = PDFToolkit.merge(paths, dest_file)
             self._add_history(res.name, str(res), "Unir PDFs")
@@ -627,3 +780,48 @@ class DesktopAPI:
                 os.startfile(str(p))
             else:
                 subprocess.Popen(["explorer", f"/select,{str(p)}"])
+
+    # ================= Auto-Actualización (GitHub Releases) =================
+
+    def check_for_updates(self) -> Dict[str, Any]:
+        """
+        Consulta de forma segura y silenciosa si existe una versión superior en GitHub Releases.
+        Si no hay conexión a internet, devuelve update_available=False sin interrumpir la app.
+        """
+        info = _core_check_for_updates(current_version=APP_VERSION)
+        if info:
+            return info
+        return {
+            "update_available": False,
+            "current_version": APP_VERSION,
+        }
+
+    def download_and_install_update(self, download_url: str, filename: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Descarga el paquete de actualización en TEMP_FOLDER reportando progreso a la UI,
+        genera `update.bat`, lo lanza en segundo plano y cierra la app para reemplazar el binario.
+        """
+        def on_progress(downloaded: int, total: int, percent: float):
+            self._safe_evaluate_js(
+                f"if (window.onUpdateDownloadProgress) window.onUpdateDownloadProgress({downloaded}, {total}, {percent});"
+            )
+
+        downloaded_path = _core_download_update(
+            download_url=download_url,
+            filename=filename,
+            temp_dir=TEMP_FOLDER / "updates",
+            progress_callback=on_progress,
+        )
+        if not downloaded_path:
+            return {
+                "success": False,
+                "error_message": "No se pudo descargar la actualización. Verifica tu conexión a internet."
+            }
+
+        try:
+            _core_apply_update(downloaded_file=downloaded_path, exit_app=True)
+            return {"success": True}
+        except SystemExit:
+            raise
+        except Exception as e:
+            return {"success": False, "error_message": f"Error al preparar el instalador de actualización: {e}"}

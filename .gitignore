@@ -33,7 +33,11 @@ dist_portable/
 dist_installer/
 tests/output_files/
 tests/sample_files/
+.pytest_cache/
+.coverage
+htmlcov/
 *.tmp
+update_*.bat
 
 # IDE
 .vscode/

@@ -1,9 +1,88 @@
 import os
 import shutil
 import subprocess
+import threading
+import gc
 from pathlib import Path
-from typing import Set, Optional, List
+from typing import Set, Optional, List, Any
 from .base import BaseConverter
+
+# Bloqueo global de exclusión mutua para automatización COM de Microsoft Office (STA)
+# Evita colisiones de memoria, errores RPC_E_DISCONNECTED (0x80010108) y bloqueos en hilos concurrentes.
+OFFICE_COM_LOCK = threading.RLock()
+
+
+def _snapshot_pids(process_name: str) -> Set[int]:
+    """Captura los PIDs activos de un ejecutable (ej: EXCEL.EXE) antes de lanzar COM."""
+    pids: Set[int] = set()
+    try:
+        import psutil
+        target = process_name.lower()
+        for proc in psutil.process_iter(["pid", "name"]):
+            try:
+                name = (proc.info.get("name") or "").lower()
+                if name == target:
+                    pids.add(int(proc.info["pid"]))
+            except Exception:
+                continue
+    except Exception:
+        pass
+    return pids
+
+
+def _resolve_com_pid(app_obj: Any, process_name: str, before_pids: Set[int]) -> Optional[int]:
+    """Obtiene el PID exacto de la instancia COM recién creada vía HWND o delta de psutil."""
+    try:
+        import win32process
+        hwnd = getattr(app_obj, "Hwnd", None) or getattr(app_obj, "HWND", None)
+        if hwnd:
+            _, pid = win32process.GetWindowThreadProcessId(int(hwnd))
+            if pid and pid > 0:
+                return int(pid)
+    except Exception:
+        pass
+
+    try:
+        after_pids = _snapshot_pids(process_name)
+        new_pids = after_pids - before_pids
+        if new_pids:
+            return next(iter(new_pids))
+    except Exception:
+        pass
+    return None
+
+
+def _terminate_orphaned_pid(pid: Optional[int]) -> None:
+    """
+    Liquida de inmediato un proceso COM huérfano (EXCEL.EXE / POWERPNT.EXE)
+    cuando ocurre un fallo, timeout o el proceso no cierra tras Quit().
+    """
+    if not pid or pid <= 0:
+        return
+    try:
+        import psutil
+        if psutil.pid_exists(pid):
+            proc = psutil.Process(pid)
+            if proc.is_running():
+                proc.terminate()
+                try:
+                    proc.wait(timeout=2)
+                except psutil.TimeoutExpired:
+                    proc.kill()
+        return
+    except Exception:
+        pass
+
+    if os.name == "nt":
+        try:
+            subprocess.run(
+                ["taskkill", "/F", "/PID", str(pid)],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=3,
+            )
+        except Exception:
+            pass
 
 
 class OfficeConverter(BaseConverter):
@@ -82,59 +161,106 @@ class OfficeConverter(BaseConverter):
         import win32com.client
         import pythoncom
 
-        pythoncom.CoInitialize()
-        excel = None
-        wb = None
-        try:
-            xlTypePDF = 0
-            xlPortrait = 1
-            xlLandscape = 2
+        with OFFICE_COM_LOCK:
+            com_initialized = False
+            try:
+                pythoncom.CoInitialize()
+                com_initialized = True
+            except Exception:
+                pass
 
-            excel = win32com.client.DispatchEx("Excel.Application")
-            excel.Visible = False
-            excel.DisplayAlerts = False
-            excel.ScreenUpdating = False
+            excel = None
+            wb = None
+            com_pid: Optional[int] = None
+            com_failed = False
+            before_pids = _snapshot_pids("EXCEL.EXE")
+            try:
+                xlTypePDF = 0
+                xlPortrait = 1
+                xlLandscape = 2
 
-            wb = excel.Workbooks.Open(str(input_path.resolve()), ReadOnly=True)
+                excel = win32com.client.DispatchEx("Excel.Application")
+                com_pid = _resolve_com_pid(excel, "EXCEL.EXE", before_pids)
+                excel.Visible = False
+                excel.DisplayAlerts = False
+                excel.ScreenUpdating = False
 
-            for ws in wb.Worksheets:
-                used_cols = 0
-                try:
-                    used_cols = ws.UsedRange.Columns.Count
-                except Exception:
-                    pass
+                wb = excel.Workbooks.Open(str(input_path.resolve()), ReadOnly=True)
 
-                # Orientación inteligente
-                if orientation == "auto":
-                    if used_cols > 6:
+                for ws in wb.Worksheets:
+                    used_cols = 0
+                    try:
+                        used_cols = ws.UsedRange.Columns.Count
+                    except Exception:
+                        pass
+
+                    # Orientación inteligente
+                    if orientation == "auto":
+                        if used_cols > 6:
+                            ws.PageSetup.Orientation = xlLandscape
+                        else:
+                            ws.PageSetup.Orientation = xlPortrait
+                    elif orientation == "landscape":
                         ws.PageSetup.Orientation = xlLandscape
-                    else:
+                    elif orientation == "portrait":
                         ws.PageSetup.Orientation = xlPortrait
-                elif orientation == "landscape":
-                    ws.PageSetup.Orientation = xlLandscape
-                elif orientation == "portrait":
-                    ws.PageSetup.Orientation = xlPortrait
 
-                # Auto-ajuste de columnas al ancho de la hoja
-                if auto_fit:
-                    ws.PageSetup.Zoom = False
-                    ws.PageSetup.FitToPagesWide = 1
-                    ws.PageSetup.FitToPagesTall = False
+                    # Auto-ajuste de columnas al ancho de la hoja
+                    if auto_fit:
+                        ws.PageSetup.Zoom = False
+                        ws.PageSetup.FitToPagesWide = 1
+                        ws.PageSetup.FitToPagesTall = False
 
-            wb.ExportAsFixedFormat(xlTypePDF, str(output_path.resolve()))
-            return output_path
-        finally:
-            if wb:
+                wb.ExportAsFixedFormat(xlTypePDF, str(output_path.resolve()))
+                return output_path
+            except Exception:
+                com_failed = True
+                raise
+            finally:
+                if 'ws' in locals():
+                    del ws
+                if wb is not None:
+                    try:
+                        wb.Close(SaveChanges=False)
+                    except Exception:
+                        pass
+                    wb = None
+                gc.collect()
+                if excel is not None:
+                    try:
+                        excel.Quit()
+                    except Exception:
+                        com_failed = True
+
+                # Deshabilitar faulthandler durante la liberación del stub COM desconectado
+                # para evitar falsas alarmas VEH de RPC_E_DISCONNECTED (0x80010108) en Python/Windows.
+                fh_enabled = False
                 try:
-                    wb.Close(SaveChanges=False)
+                    import faulthandler
+                    fh_enabled = faulthandler.is_enabled()
+                    if fh_enabled:
+                        faulthandler.disable()
                 except Exception:
                     pass
-            if excel:
+
                 try:
-                    excel.Quit()
-                except Exception:
-                    pass
-            pythoncom.CoUninitialize()
+                    excel = None
+                    gc.collect()
+                    if com_initialized:
+                        try:
+                            pythoncom.CoUninitialize()
+                        except Exception:
+                            pass
+                finally:
+                    if fh_enabled:
+                        try:
+                            faulthandler.enable()
+                        except Exception:
+                            pass
+
+                # Si falló la exportación o Quit() falló, liquidar proceso EXCEL.EXE huérfano
+                if com_failed and com_pid:
+                    _terminate_orphaned_pid(com_pid)
 
     def _excel_via_reportlab(
         self,
@@ -285,28 +411,71 @@ class OfficeConverter(BaseConverter):
         import win32com.client
         import pythoncom
 
-        pythoncom.CoInitialize()
-        ppt = None
-        pres = None
-        try:
-            ppSaveAsPDF = 32
+        with OFFICE_COM_LOCK:
+            com_initialized = False
+            try:
+                pythoncom.CoInitialize()
+                com_initialized = True
+            except Exception:
+                pass
 
-            ppt = win32com.client.DispatchEx("PowerPoint.Application")
-            pres = ppt.Presentations.Open(str(input_path.resolve()), WithWindow=False, ReadOnly=True)
-            pres.SaveAs(str(output_path.resolve()), ppSaveAsPDF)
-            return output_path
-        finally:
-            if pres:
+            ppt = None
+            pres = None
+            com_pid: Optional[int] = None
+            com_failed = False
+            before_pids = _snapshot_pids("POWERPNT.EXE")
+            try:
+                ppSaveAsPDF = 32
+
+                ppt = win32com.client.DispatchEx("PowerPoint.Application")
+                com_pid = _resolve_com_pid(ppt, "POWERPNT.EXE", before_pids)
+                pres = ppt.Presentations.Open(str(input_path.resolve()), WithWindow=False, ReadOnly=True)
+                pres.SaveAs(str(output_path.resolve()), ppSaveAsPDF)
+                return output_path
+            except Exception:
+                com_failed = True
+                raise
+            finally:
+                if pres is not None:
+                    try:
+                        pres.Close()
+                    except Exception:
+                        pass
+                    pres = None
+                gc.collect()
+                if ppt is not None:
+                    try:
+                        ppt.Quit()
+                    except Exception:
+                        com_failed = True
+
+                fh_enabled = False
                 try:
-                    pres.Close()
+                    import faulthandler
+                    fh_enabled = faulthandler.is_enabled()
+                    if fh_enabled:
+                        faulthandler.disable()
                 except Exception:
                     pass
-            if ppt:
+
                 try:
-                    ppt.Quit()
-                except Exception:
-                    pass
-            pythoncom.CoUninitialize()
+                    ppt = None
+                    gc.collect()
+                    if com_initialized:
+                        try:
+                            pythoncom.CoUninitialize()
+                        except Exception:
+                            pass
+                finally:
+                    if fh_enabled:
+                        try:
+                            faulthandler.enable()
+                        except Exception:
+                            pass
+
+                # Si falló la exportación o Quit() falló, liquidar proceso POWERPNT.EXE huérfano
+                if com_failed and com_pid:
+                    _terminate_orphaned_pid(com_pid)
 
     # ================= Fallback LibreOffice =================
 

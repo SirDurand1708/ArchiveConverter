@@ -1,6 +1,23 @@
 import sys
 import argparse
+import traceback
+import multiprocessing
 from pathlib import Path
+from typing import Optional
+
+
+def _launch_modern_gui(initial_file: Optional[str] = None) -> None:
+    """Inicia la interfaz gráfica web moderna con manejo controlado de errores."""
+    try:
+        from ui_web import run_modern_gui
+        run_modern_gui(initial_file=initial_file)
+    except Exception as exc:
+        print(
+            f"[ERROR CRÍTICO] No se pudo iniciar la interfaz gráfica de ArchiveConverter: {exc}",
+            file=sys.stderr,
+        )
+        traceback.print_exc(file=sys.stderr)
+        sys.exit(1)
 
 
 def handle_conversion(args, manager):
@@ -38,19 +55,8 @@ def handle_conversion(args, manager):
 def main():
     # Si se ejecuta sin argumentos (doble clic o desde consola), abrir la interfaz moderna
     if len(sys.argv) == 1:
-        try:
-            from ui_web import run_modern_gui
-            run_modern_gui()
-            return
-        except Exception as e:
-            print(f"[AVISO] Iniciando interfaz alternativa ({e}).")
-            try:
-                from ui import run_gui
-                run_gui()
-                return
-            except Exception as e2:
-                print(f"[ERROR] No se pudo iniciar ninguna interfaz: {e2}")
-                return
+        _launch_modern_gui()
+        return
 
     # Si se pasa un solo archivo (menú contextual del Explorador de Windows o arrastrar sobre el .exe)
     if len(sys.argv) == 2 and not sys.argv[1].startswith("-"):
@@ -59,12 +65,8 @@ def main():
             cand = Path(sys.argv[1])
             if cand.exists() and cand.is_file():
                 if hasattr(sys, 'frozen') or not hasattr(sys.stdin, 'isatty') or not sys.stdin.isatty():
-                    try:
-                        from ui_web import run_modern_gui
-                        run_modern_gui(initial_file=str(cand.resolve()))
-                        return
-                    except Exception:
-                        pass
+                    _launch_modern_gui(initial_file=str(cand.resolve()))
+                    return
 
     parser = argparse.ArgumentParser(
         description="ArchiveConverter - Convertidor y caja de herramientas de archivos local y privado."
@@ -125,12 +127,9 @@ def main():
     manager = ConverterManager()
 
     if args.command == "gui":
-        if args.legacy:
-            from ui import run_gui
-            run_gui()
-        else:
-            from ui_web import run_modern_gui
-            run_modern_gui(initial_file=args.file)
+        if getattr(args, "legacy", False):
+            print("[AVISO] La interfaz clásica fue retirada; iniciando la interfaz web moderna.", file=sys.stderr)
+        _launch_modern_gui(initial_file=args.file)
         return
     elif args.command == "merge":
         res = PDFToolkit.merge(args.files, args.output)
@@ -168,18 +167,17 @@ def main():
         return
 
     if not args.input_file:
-        from ui_web import run_modern_gui
-        run_modern_gui()
+        _launch_modern_gui()
         return
 
     # Si se pasa un archivo sin formato de destino y no estamos en terminal interactivo
     if not args.target_format and (hasattr(sys, 'frozen') or not hasattr(sys.stdin, 'isatty') or not sys.stdin.isatty()):
-        from ui_web import run_modern_gui
-        run_modern_gui(initial_file=args.input_file)
+        _launch_modern_gui(initial_file=args.input_file)
         return
 
     handle_conversion(args, manager)
 
 
 if __name__ == "__main__":
+    multiprocessing.freeze_support()
     main()

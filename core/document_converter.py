@@ -46,9 +46,27 @@ class DocumentConverter(BaseConverter):
         # 2. DOCX -> PDF
         if in_ext == ".docx" and out_ext == ".pdf":
             try:
-                from docx2pdf import convert as docx_to_pdf
-                docx_to_pdf(str(input_path), str(output_path))
-                return output_path
+                from .office_converter import OFFICE_COM_LOCK
+                with OFFICE_COM_LOCK:
+                    com_init = False
+                    try:
+                        import pythoncom
+                        pythoncom.CoInitialize()
+                        com_init = True
+                    except Exception:
+                        pass
+                    try:
+                        from docx2pdf import convert as docx_to_pdf
+                        docx_to_pdf(str(input_path), str(output_path))
+                        return output_path
+                    finally:
+                        if com_init:
+                            try:
+                                import gc
+                                gc.collect()
+                                pythoncom.CoUninitialize()
+                            except Exception:
+                                pass
             except Exception as docx_err:
                 # Fallback a LibreOffice si no tiene MS Word instalado
                 import shutil
