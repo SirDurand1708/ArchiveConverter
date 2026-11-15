@@ -103,6 +103,11 @@ def main():
         action="store_true",
         help="Verifica en modo headless la disponibilidad e integridad SHA-256 del modelo IA local y sale.",
     )
+    parser.add_argument(
+        "--verify-ocr",
+        action="store_true",
+        help="Verifica en modo headless que RapidOCR y sus diccionarios/modelos carguen correctamente y sale.",
+    )
     subparsers = parser.add_subparsers(dest="command", help="Comandos disponibles")
 
     # Subcomando: gui
@@ -169,9 +174,25 @@ def main():
             digest = BackgroundRemover.verify_model_integrity(model_path)
             create_onnx_session(model_path)
             print(f"[OK] Modelo IA verificado: {model_path} (sha256={digest})")
-            return
+            if not getattr(args, "verify_ocr", False):
+                return
         except Exception as exc:
             print(f"[ERROR] Verificación de modelo IA fallida: {exc}", file=sys.stderr)
+            traceback.print_exc(file=sys.stderr)
+            sys.exit(1)
+
+    if getattr(args, "verify_ocr", False):
+        try:
+            import numpy as np
+            from core.ocr_engine import OCREngine
+            engine = OCREngine.get_engine()
+            dummy = np.full((64, 64, 3), 255, dtype=np.uint8)
+            engine(dummy)
+            print("[OK] Motor OCR (RapidOCR + diccionarios/modelos) verificado en modo headless.")
+            return
+        except Exception as exc:
+            print(f"[ERROR] Verificación OCR fallida: {exc}", file=sys.stderr)
+            traceback.print_exc(file=sys.stderr)
             sys.exit(1)
 
     from core import ConverterManager, PDFToolkit

@@ -116,12 +116,16 @@ jobs:
       run: |
         pyinstaller ArchiveConverter.spec --noconfirm
 
-    - name: Smoke test frozen executable (--verify-model headless)
+    - name: Smoke test frozen executable (--verify-model --verify-ocr headless)
       shell: pwsh
       run: |
-        .\dist\ArchiveConverter\ArchiveConverter.exe --verify-model
-        if ($LASTEXITCODE -ne 0) {
-          Write-Error "El smoke test --verify-model falló en el binario congelado."
+        $outLog = "$env:TEMP\ac_smoke_out.log"
+        $errLog = "$env:TEMP\ac_smoke_err.log"
+        $proc = Start-Process -FilePath ".\dist\ArchiveConverter\ArchiveConverter.exe" -ArgumentList "--verify-model --verify-ocr" -Wait -PassThru -RedirectStandardOutput $outLog -RedirectStandardError $errLog
+        if (Test-Path $outLog) { Get-Content $outLog }
+        if (Test-Path $errLog) { Get-Content $errLog }
+        if ($proc.ExitCode -ne 0) {
+          Write-Error "El smoke test --verify-model --verify-ocr falló con ExitCode=$($proc.ExitCode)."
           exit 1
         }
 

@@ -54,3 +54,27 @@ Expandir **ArchiveConverter** manteniendo su arquitectura 100% offline, UI monol
 ### 2.8 Logs de Diagnóstico Local Offline (`core/diagnostics.py`)
 - **Logging rotativo:** Inicializado únicamente tras adquirir el Mutex primario en `%LOCALAPPDATA%\ArchiveConverter\logs\app.log` (2 MB × 3 archivos).
 - **Exportación sanitizada (`export_diagnostic_report()`):** Incluye versión, SO, RAM (`psutil`), estado del modelo ONNX y últimas 150 líneas del log enmascarando `%USERNAME%` y nombres de archivos de usuario.
+
+---
+
+## 3. Plan de Estabilización y Evolución v1.3.1 (Decisiones Definitivas)
+
+### 3.1 Estabilidad CI/CD, Empaquetado y Distribución (`ArchiveConverter.spec`, `main.py`, `build-release.yml`)
+- **Empaquetado "Todo incluido offline" (< 300 MB):** `ArchiveConverter.spec` recopila explícitamente `datas`, `binaries` y `hiddenimports` de `collect_all(...)` (incluyendo `rapidocr_onnxruntime` y `onnxruntime`).
+- **Smoke test ampliado en CI (`--verify-model --verify-ocr`):**
+  - `--verify-model` valida la existencia, SHA-256 e inicialización de sesión ONNX de `u2net.onnx`.
+  - `--verify-ocr` valida la carga offline de `RapidOCR`, sus diccionarios y una inferencia de prueba en modo headless.
+  - Ejecución en `build-release.yml` mediante `Start-Process -Wait -PassThru` con captura y volcado de `stdout`/`stderr` para visibilidad total del binario `console=False`.
+- **Distribución y Seguridad:** Sin certificado Authenticode comercial; verificación fail-closed contra `SHA256SUMS.txt` y documentación transparente para SmartScreen.
+
+### 3.2 Motor OCR en Español, Imágenes Sueltas y Progreso por Página
+- **Soporte estricto de español (tildes y `ñ`):** Garantizar diccionarios/modelos con cobertura latina completa y escritura Unicode (`UTF-8` en `.txt`, `python-docx` en `.docx` y fuentes/código compatible en `.pdf` buscable).
+- **OCR en imágenes sueltas (`core/ocr_engine.py` + `core/manager.py` + `ui_web/api.py`):** Exponer `OCREngine.process_image(...)` y habilitar salida OCR (`ocr_txt`, `ocr_docx`) desde el conversor universal para fotos y capturas (`.png`, `.jpg`, `.jpeg`, `.webp`, `.bmp`, `.tiff`).
+- **Progreso por página en PDFs largos (`Página X de Y`):** Callback de progreso por página en `OCREngine.process_pdf` propagado a `ui_web/index.html` vía `_safe_evaluate_js` con throttling.
+- **Compresión PDF:** Mantener exclusivamente los 3 presets fijos (`balanced`, `aggressive_150`, `aggressive_96`), sin sliders complejos.
+- **Ejecución CPU pura:** Sin proveedores GPU/DirectML para máxima estabilidad y compatibilidad en Windows.
+
+### 3.3 UX de Escritorio y Notificaciones Nativas
+- **Botón explícito `📁 Agregar carpeta`:** Selector nativo de directorios (`webview.FOLDER_DIALOG`) conectado a `expand_dropped_paths` en `DesktopAPI` para sortear las restricciones de rutas de carpetas en WebView2.
+- **Notificaciones Toast nativas de Windows:** Aviso nativo no bloqueante al completar tareas pesadas (lotes largos, OCR o `remove_bg`) cuando la ventana esté minimizada o en segundo plano.
+- **Alcance estricto:** UI minimalista sin previsualización pesada ni presets de usuario, telemetría 100% manual/offline, y enfoque en pruebas unitarias Python (sin suite E2E de navegador).

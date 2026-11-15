@@ -23,14 +23,7 @@ for pkg in ['tqdm', 'numpy', 'jsonschema']:
     except Exception:
         pass
 
-# Recopilar recursos y modelos necesarios para las librerías
-for pkg in ['reportlab', 'pillow_heif', 'pymupdf', 'onnxruntime', 'rapidocr_onnxruntime']:
-    try:
-        pkg_datas, pkg_binaries, pkg_hidden = collect_all(pkg)
-        datas.extend(pkg_datas)
-    except Exception:
-        pass
-
+binaries = []
 hiddenimports = [
     'win32com.client',
     'pythoncom',
@@ -54,10 +47,22 @@ hiddenimports = [
     'pythonnet',
 ]
 
+# Recopilar recursos, binarios y submódulos necesarios para las librerías
+for pkg in ['reportlab', 'pillow_heif', 'pymupdf', 'onnxruntime', 'rapidocr_onnxruntime']:
+    try:
+        pkg_datas, pkg_binaries, pkg_hidden = collect_all(pkg)
+        datas.extend(pkg_datas)
+        binaries.extend(pkg_binaries)
+        hiddenimports.extend(pkg_hidden)
+    except Exception:
+        pass
+
+hiddenimports = list(dict.fromkeys(hiddenimports))
+
 a = Analysis(
     ['main.py'],
     pathex=['.'],
-    binaries=[],
+    binaries=binaries,
     datas=datas,
     hiddenimports=hiddenimports,
     hookspath=[],
