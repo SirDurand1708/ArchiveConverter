@@ -1,8 +1,11 @@
+import io
 import uuid
 import tempfile
+import threading
 import time
 from pathlib import Path
-from typing import List, Optional, Sequence
+from typing import Dict, List, Optional, Sequence
+from PIL import Image
 
 try:
     import pymupdf
@@ -145,18 +148,134 @@ class PDFToolkit:
                 new_doc.close()
 
     @staticmethod
-    def compress(input_path: str | Path, output_path: Optional[str | Path] = None) -> Path:
+    def _downsample_pdf_images(
+        doc: "pymupdf.Document",
+        target_dpi: int,
+        cancel_event: Optional[threading.Event] = None,
+    ) -> None:
         """
-        Optimiza y reduce el tamaño de un PDF aplicando deflación de streams
-        y eliminando objetos no utilizados (garbage collection).
+        Re-muestrea imágenes embebidas que superen target_dpi preservando canales especiales
+        (1-bit CCITT/JBIG2, Indexed, CMYK) y SMask, y reemplazando solo si reduce bytes.
+        """
+        # 1. Calcular el DPI efectivo máximo por xref en todas sus apariciones
+        xref_max_dpi: Dict[int, float] = {}
+        xref_page_ref: Dict[int, "pymupdf.Page"] = {}
+        xref_smask: Dict[int, int] = {}
+
+        for page in doc:
+            if cancel_event is not None and cancel_event.is_set():
+                raise InterruptedError("Compresión de PDF cancelada por el usuario.")
+            for info in page.get_images(full=True):
+                xref = info[0]
+                smask = info[1]
+                pix_w, pix_h = info[2], info[3]
+                bpc = info[4]
+                cs_name = str(info[5] or "")
+                if bpc == 1 or "CMYK" in cs_name.upper() or "INDEXED" in cs_name.upper():
+                    continue
+                if pix_w <= 0 or pix_h <= 0:
+                    continue
+
+                rects = page.get_image_rects(xref)
+                eff_dpi = float(target_dpi)
+                if rects:
+                    max_rect_dpi = 0.0
+                    for r in rects:
+                        w_in = max(r.width / 72.0, 0.01)
+                        h_in = max(r.height / 72.0, 0.01)
+                        max_rect_dpi = max(max_rect_dpi, pix_w / w_in, pix_h / h_in)
+                    eff_dpi = max_rect_dpi
+
+                if xref not in xref_max_dpi or eff_dpi > xref_max_dpi[xref]:
+                    xref_max_dpi[xref] = eff_dpi
+                    xref_page_ref[xref] = page
+                    if smask and smask > 0:
+                        xref_smask[xref] = smask
+
+        jpeg_quality = 80 if target_dpi >= 150 else 72
+
+        for xref, eff_dpi in xref_max_dpi.items():
+            if cancel_event is not None and cancel_event.is_set():
+                raise InterruptedError("Compresión de PDF cancelada por el usuario.")
+            if eff_dpi <= target_dpi * 1.05:
+                continue
+
+            base = doc.extract_image(xref)
+            if not base or not base.get("image"):
+                continue
+            orig_bytes = base["image"]
+            scale = float(target_dpi) / float(eff_dpi)
+            if scale >= 0.98:
+                continue
+
+            try:
+                with Image.open(io.BytesIO(orig_bytes)) as pil_img:
+                    new_w = max(1, int(round(pil_img.width * scale)))
+                    new_h = max(1, int(round(pil_img.height * scale)))
+                    if new_w >= pil_img.width and new_h >= pil_img.height:
+                        continue
+                    if pil_img.mode not in ("RGB", "L"):
+                        pil_img = pil_img.convert("RGB")
+                    resized = pil_img.resize((new_w, new_h), Image.Resampling.LANCZOS)
+                    buf = io.BytesIO()
+                    resized.save(buf, format="JPEG", quality=jpeg_quality, optimize=True)
+                    new_bytes = buf.getvalue()
+            except Exception:
+                continue
+
+            if len(new_bytes) >= len(orig_bytes):
+                continue
+
+            page_ref = xref_page_ref[xref]
+            # Si tiene SMask, re-muestrear proporcionalmente para conservar transparencia
+            smask_xref = xref_smask.get(xref)
+            if smask_xref:
+                try:
+                    smask_base = doc.extract_image(smask_xref)
+                    if smask_base and smask_base.get("image"):
+                        with Image.open(io.BytesIO(smask_base["image"])) as sm_img:
+                            sm_resized = sm_img.convert("L").resize((new_w, new_h), Image.Resampling.LANCZOS)
+                            sm_buf = io.BytesIO()
+                            sm_resized.save(sm_buf, format="PNG", optimize=True)
+                            page_ref.replace_image(smask_xref, stream=sm_buf.getvalue())
+                except Exception:
+                    continue
+
+            try:
+                page_ref.replace_image(xref, stream=new_bytes)
+            except Exception:
+                continue
+
+    @staticmethod
+    def compress(
+        input_path: str | Path,
+        output_path: Optional[str | Path] = None,
+        mode: str = "balanced",
+        cancel_event: Optional[threading.Event] = None,
+    ) -> Path:
+        """
+        Optimiza y reduce el tamaño de un PDF aplicando deflación de streams,
+        eliminación de objetos no utilizados y downsampling opcional (150/96 DPI).
         """
         in_p = Path(input_path).resolve()
         out_p = Path(output_path).resolve() if output_path else in_p.with_stem(f"{in_p.stem}_comprimido")
         out_p.parent.mkdir(parents=True, exist_ok=True)
 
+        if cancel_event is not None and cancel_event.is_set():
+            raise InterruptedError("Compresión de PDF cancelada por el usuario.")
+
         with pymupdf.open(str(in_p)) as doc:
             if doc.is_encrypted:
                 raise PermissionError(f"El archivo '{in_p.name}' está protegido con contraseña. Desbloquéalo primero.")
+
+            if mode == "aggressive_150":
+                PDFToolkit._downsample_pdf_images(doc, target_dpi=150, cancel_event=cancel_event)
+            elif mode == "aggressive_96":
+                PDFToolkit._downsample_pdf_images(doc, target_dpi=96, cancel_event=cancel_event)
+
+            if cancel_event is not None and cancel_event.is_set():
+                raise InterruptedError("Compresión de PDF cancelada por el usuario.")
+
             _safe_save_pdf(
                 doc,
                 out_p,

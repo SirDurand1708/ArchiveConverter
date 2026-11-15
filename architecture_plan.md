@@ -1,57 +1,56 @@
-# ARCHITECTURE PLAN: Integración Frontend (`ui_web`) para IA Offline, Errores Tipados y Auto-Updater
+# ARCHITECTURE PLAN v1.3.0 (FINAL): Expansión Enterprise (OCR Local, Compresión PDF Agresiva, Cancelación, Instancia Única y Diagnóstico)
 
 ## 1. Definición del Problema
-Conectar la interfaz web de escritorio ([ui_web/index.html](file:///C:/Users/georg/Documents/GitHub/ArchiveConverter/ui_web/index.html)) con el backend blindado (`DesktopAPI`, `BackgroundRemover` v3 y `updater.py`) para ofrecer:
-- Mensajes de error claros y accionables basados en `error_code` sin usar `alert()`/`confirm()` nativos.
-- Diagnóstico inicial de IA offline (`check_ai_model_status`) y feedback visual de *downscaling* (`<= 2048 px`).
-- Notificación silenciosa de actualizaciones de GitHub Releases con barra de progreso y confirmación no bloqueante.
-- Bloqueo selectivo de botones de acción durante tareas pesadas manteniendo el resto de la interfaz navegable.
+Expandir **ArchiveConverter** manteniendo su arquitectura 100% offline, UI monolítica en `ui_web/index.html` sin Node/Webpack y empaquetado `--onedir`, cerrando todos los requisitos de seguridad, concurrencia y estabilidad en Windows.
 
 ---
 
-## 2. Especificaciones Técnicas por Componente
+## 2. Decisiones Arquitectónicas Cerradas (Resolución de Bloqueos)
 
-### 2.1 Mapeo Centralizado de Errores y Toasts/Banners (`ui_web/index.html`)
-- **Prohibición de diálogos nativos del navegador (`alert`, `confirm`):** Toda notificación y confirmación usará un componente de **toast/banner inline no bloqueante** con soporte de botón de acción opcional y cierre manual/automático.
-- **Diccionario `AI_ERROR_CATALOG` en JS:** Mapea cada `error_code` devuelto por `DesktopAPI.remove_image_bg`:
-  - `MODEL_MISSING` / `MODEL_CORRUPT`: Mensaje claro sobre el modelo offline + sugerencia de reinstalar/verificar integridad; actualiza la píldora de estado IA a estado de alerta.
-  - `PERMISSION_DENIED`: Mensaje indicando carpeta de solo lectura/protegida + botón de acción **"Elegir otra carpeta"** que dispara `select_folder()` para reintentar.
-  - `ANIMATED_UNSUPPORTED`: Explica que imágenes animadas o multipágina (GIF/WebP/TIFF/APNG) no están soportadas.
-  - `IMAGE_TOO_LARGE`: Explica el límite seguro de memoria (`40 MP`).
-  - `UNSUPPORTED_FORMAT`: Lista los formatos aceptados (`.png`, `.jpg`, `.jpeg`, `.webp`, `.bmp`, `.tiff`).
-  - `BUSY`: Avisa que ya hay una operación IA en curso sin sobrescribir el estado de error crítico.
-  - `WORKER_CRASHED` / `WORKER_TIMEOUT` / `PROCESSING_ERROR`: Mensaje amigable indicando que el proceso aislado protegió la app y botón para reintentar.
-- **Seguridad XSS en JS:** Todos los mensajes, nombres de archivo y versiones insertados en el DOM usarán `textContent` (o helper `escapeHtml()`) en lugar de interpolar HTML sin sanitizar.
+### 2.1 OCR Local Ligero (`core/ocr_engine.py` + `ArchiveConverter.spec`)
+- **Motor:** `rapidocr_onnxruntime` ejecutado sobre `CPUExecutionProvider`.
+- **Control de memoria (anti-OOM):**
+  - Renderizado por página en *streaming* (liberando `pix = None` tras cada página).
+  - Tope duro de resolución por página (`max_dim = 3500 px` en el lado mayor, calculando el factor de zoom efectivo para no exceder dicho límite en planos grandes).
+- **Capa de texto buscable en PDF:**
+  - Inversión de `/Rotate` y `CropBox` mediante la matriz inversa de PyMuPDF (`page.derotation_matrix`) al posicionar `insert_text(..., render_mode=3)` con fuente Unicode compatible.
+- **Empaquetado `--onedir`:** Incluir `collect_all('rapidocr_onnxruntime')` en `ArchiveConverter.spec` para empaquetar modelos ONNX, diccionarios y `config.yaml` sin descargas en runtime.
 
-### 2.2 Píldora de Estado IA y Feedback de *Downscaling*
-- **Arranque (`pywebviewready`):**
-  - Invocar `window.pywebview.api.check_ai_model_status()` de forma asíncrona (no bloqueante) al inicializar la UI.
-  - Pintar una **píldora de estado discreta** en la cabecera:
-    - Verde: `"IA Local Lista"` (tooltip con ruta local).
-    - Ámbar/Rojo: `"IA Offline No Disponible"` (sin bloquear el resto de herramientas PDF/Office/Imagen).
-- **Detección exacta de *downscaling* (`core/bg_remover.py` + `ui_web/api.py`):**
-  - En `sanitize_and_load_image` / `run_inference_in_process` y `DesktopAPI.remove_image_bg`, incluir `downscaled: bool`, `original_width`, `original_height`, `width`, `height`.
-  - Cuando `res.downscaled === true`, mostrar un aviso informativo junto al resultado: *"Imagen optimizada automáticamente de {original_width}×{original_height} a {width}×{height} px para proteger la memoria"*.
+### 2.2 Compresión Real de PDF Agresiva (`core/pdf_tools.py`)
+- **Modos en `PDFToolkit.compress`:** `balanced`, `aggressive_150` (150 DPI) y `aggressive_96` (96 DPI).
+- **Preservación de canales especiales:**
+  - Excluir e intactar imágenes `1-bit` (CCITT/JBIG2), `Indexed` (paleta) y `CMYK` (para evitar explosión de tamaño o inversión de colores).
+  - Re-muestrear proporcionalmente cualquier `SMask` asociado para conservar la transparencia sin fondos negros.
+- **Deduplicación de `xref` y verificación de ganancia:**
+  - Calcular el DPI efectivo máximo de cada `xref` entre todas las páginas donde aparece; solo re-muestrear si supera el DPI objetivo.
+  - Comparar bytes del stream recomprimido vs original y conservar el menor.
+- **Atomicidad:** Cerrar todos los handles de `fitz.Document` y escribir en `NamedTemporaryFile` dentro del **mismo directorio** que el destino antes de `os.replace()`.
 
-### 2.3 Auto-Updater en la UI (`ui_web/index.html` + `ui_web/api.py`)
-- **Comprobación silenciosa al arranque (`pywebviewready`):**
-  - Llamar `window.pywebview.api.check_for_updates()` tras cargar la UI (con un pequeño retardo opcional o en segundo plano). Si no hay red o `update_available === false`, no mostrar nada.
-- **Banner sutil + Confirmación + Progreso:**
-  - Si `update_available === true`, mostrar un **banner sutil** en la parte superior con la nueva versión (`tag_name`), notas breves y botón **"Actualizar"**.
-  - Al pulsar **"Actualizar"**, abrir un **diálogo/banner inline de confirmación** (sin `confirm()` nativo) advirtiendo que la app se descargará y reiniciará automáticamente.
-  - Al confirmar, deshabilitar el botón (guardia anti doble-clic), mostrar barra de progreso (`0–100%`) alimentada por `window.onUpdateDownloadProgress(downloaded, total, percent)` y llamar `download_and_install_update(download_url, filename)`.
-  - Si `download_and_install_update` devuelve `{ success: false }`, re-habilitar el botón y mostrar el error en toast inline.
-  - También incluir un botón discreto **"Buscar actualizaciones"** (por ejemplo en el pie/cabecera) para comprobación manual.
+### 2.3 Cancelación Cooperativa por `job_id` (`ui_web/api.py` + `core/ocr_engine.py` + `core/pdf_tools.py`)
+- **Token inmutable por ejecución:** Cada lote o tarea larga crea su propio `threading.Event` asociado a un `job_id` único (eliminando carreras entre lotes consecutivos).
+- **Propagación:** El `cancel_event` se comprueba entre archivos en `convert_batch` y **entre páginas** dentro de `PDFToolkit.compress` y `OCREngine`; al abortar, limpia archivos temporales parciales y devuelve `cancelled: True`.
 
-### 2.4 Bloqueo Selectivo de Concurrencia en UI
-- **Estado `isAiOrBatchBusy` en JS:**
-  - Al iniciar `remove_image_bg` o `convert_batch` (`remove_bg`), deshabilitar **únicamente** los botones de acción de conversión/IA afectados (cambiando el texto a *"Procesando en proceso aislado..."* con spinner CSS), **sin bloquear** la navegación entre pestañas, historial ni herramientas PDF independientes.
-  - Garantizar la restauración de los botones dentro de un bloque `try { ... } finally { ... }` incluso si la promesa de PyWebView rechaza o falla.
+### 2.4 Persistencia de Preferencias (`core/settings.py`)
+- **Ruta:** `%APPDATA%\ArchiveConverter\settings.json` (fallback `~/.config/ArchiveConverter/settings.json`).
+- **Esquema:** `{ "theme": "dark"|"light", "default_output_dir": str|null, "pdf_compression_mode": "balanced"|"aggressive_150"|"aggressive_96", "recursive_folder_scan": bool }`.
+- **Escritura atómica:** `NamedTemporaryFile(dir=settings_dir)` + `flush()` + `os.replace()`.
 
----
+### 2.5 Drag & Drop Recursivo de Carpetas + Reporte `downscaled` en Lote
+- **PyWebView + Seguridad de escaneo:** Uso del hook nativo de PyWebView para obtener rutas reales de carpetas; escaneo recursivo acotado (máx. 500 archivos, filtrando symlinks, *Junction Points* de Windows y archivos *cloud-only* offline de OneDrive cuando aplique).
+- **Lote `remove_bg`:** Acumula `downscaled_count` en `convert_batch` y lo devuelve en el resumen a `ui_web/index.html`.
 
-## 3. Archivos a Modificar
-- `core/bg_remover.py` (añadir `downscaled`, `original_width`, `original_height` al resultado estructurado)
-- `ui_web/api.py` (propagar `downscaled`, `original_width`, `original_height` en `remove_image_bg`)
-- `ui_web/index.html` (píldora IA, catálogo `AI_ERROR_CATALOG`, toasts/banners inline, banner/progreso de auto-updater, bloqueo selectivo en `try/finally`)
-- `tests/test_bg_remover_v3.py` (verificar `downscaled`, `original_width`, `original_height` en payload)
+### 2.6 Instancia Única con Mutex + Named Pipe IPC (`core/single_instance.py` + `main.py`)
+- **Windows Named Mutex (`Local\ArchiveConverterSingleInstanceMutex`):** Adquirido en `main.py` tras `freeze_support()` y flags CLI headless (`--verify-model`).
+- **Named Pipe (`\\.\pipe\ArchiveConverterIPC`):**
+  - El servidor usa `PIPE_UNLIMITED_INSTANCES` con descriptor de seguridad restringido al SID del usuario actual.
+  - Los procesos secundarios (ráfaga de menú contextual) usan bucle de reintentos con `WaitNamedPipe` / backoff (hasta 8–10 s), envían rutas Unicode con *framing* JSON delimitado y salen con `sys.exit(0)`.
+  - El proceso primario encola rutas en `pending_files` hasta que `bootstrapApp()` drene la cola y restaura la ventana desde su hilo GUI.
+
+### 2.7 Auto-Updater Diferenciado y Fail-Closed (`core/updater.py` + `ui_web/api.py`)
+- **Detección exacta de instalación:** Comparar `InstallLocation` de `HKCU`/`HKLM\Software\Microsoft\Windows\CurrentVersion\Uninstall\{5F7C7A28-D9E4-4284-9694-87A29E4C93B1}_is1` con `Path(sys.executable).parent.resolve()`.
+- **Fail-Closed SHA-256:** Descargar obligatoriamente `SHA256SUMS.txt` del Release y verificar el SHA-256 del asset descargado antes de ejecutarlo (abortar si falta o no coincide).
+- **Ejecución limpia:** Liberar el Mutex de instancia única y cerrar WebView2 antes de lanzar `*Setup*.exe /SILENT /CLOSEAPPLICATIONS /RESTARTAPPLICATIONS` (instalado) o el script `.bat` (portable `.zip`).
+
+### 2.8 Logs de Diagnóstico Local Offline (`core/diagnostics.py`)
+- **Logging rotativo:** Inicializado únicamente tras adquirir el Mutex primario en `%LOCALAPPDATA%\ArchiveConverter\logs\app.log` (2 MB × 3 archivos).
+- **Exportación sanitizada (`export_diagnostic_report()`):** Incluye versión, SO, RAM (`psutil`), estado del modelo ONNX y últimas 150 líneas del log enmascarando `%USERNAME%` y nombres de archivos de usuario.

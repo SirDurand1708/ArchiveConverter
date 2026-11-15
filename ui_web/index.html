@@ -1043,6 +1043,9 @@
       <button class="theme-toggle-btn" id="btn-check-updates" onclick="onManualCheckUpdates()" style="margin-bottom: 8px;">
         <span>🔄 Buscar actualizaciones</span>
       </button>
+      <button class="theme-toggle-btn" id="btn-export-diag" onclick="onExportDiagnostics()" style="margin-bottom: 8px;">
+        <span>📋 Exportar diagnóstico</span>
+      </button>
       <button class="theme-toggle-btn" onclick="toggleTheme()">
         <span id="theme-label">🌙 Modo Oscuro</span>
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/></svg>
@@ -1247,9 +1250,14 @@
           </div>
         </div>
 
-        <button class="btn-action-primary" id="batch-start-btn" onclick="onStartBatchConversion()">
-          <span id="batch-btn-text">⚡ Iniciar Conversión por Lotes</span>
-        </button>
+        <div style="display: flex; gap: 10px; align-items: center;">
+          <button class="btn-action-primary" id="batch-start-btn" onclick="onStartBatchConversion()" style="flex: 1;">
+            <span id="batch-btn-text">⚡ Iniciar Conversión por Lotes</span>
+          </button>
+          <button class="btn-secondary" id="batch-cancel-btn" onclick="onCancelBatch()" style="display: none; padding: 12px 16px;">
+            ⏹ Cancelar lote
+          </button>
+        </div>
       </div>
 
       <!-- Result Banner -->
@@ -1279,6 +1287,7 @@
         <button class="tool-tab-btn" onclick="switchTool('watermark')">💧 Marca de Agua</button>
         <button class="tool-tab-btn" onclick="switchTool('sign')">✍️ Firmar PDF</button>
         <button class="tool-tab-btn" onclick="switchTool('sec')">🔒 Seguridad</button>
+        <button class="tool-tab-btn" onclick="switchTool('ocr')">🔍 OCR</button>
       </div>
 
       <!-- PDF Tools Indeterminate Progress Bar -->
@@ -1385,8 +1394,16 @@
               <button class="btn-secondary btn-danger-pill" onclick="onClearToolFile('compress')">✕ Quitar</button>
             </div>
           </div>
+          <div class="field-group" style="margin-bottom: 10px;">
+            <label class="field-label">Modo de compresión:</label>
+            <select id="compress-mode-select">
+              <option value="balanced">Equilibrado (sin pérdida visual)</option>
+              <option value="aggressive_150">Agresivo 150 DPI (ideal web / trámites)</option>
+              <option value="aggressive_96">Máximo 96 DPI (tamaño mínimo)</option>
+            </select>
+          </div>
           <p style="font-size: 12.5px; color: var(--text-muted);">
-            Se eliminarán objetos duplicados, datos huérfanos y se aplicará compresión interna de flujos.
+            Se eliminarán objetos duplicados y datos huérfanos. En modo agresivo las imágenes raster se optimizan al DPI indicado.
           </p>
           <button class="btn-action-primary" id="compress-btn" onclick="onExecuteCompress()">
             🗜️ Comprimir y Optimizar Documento
@@ -1589,6 +1606,45 @@
             <button class="btn-action-primary" onclick="onExecuteProtect()">🔒 Proteger PDF</button>
             <button class="btn-secondary" style="height: 44px; font-size: 14px;" onclick="onExecuteUnlock()">🔓 Desbloquear</button>
           </div>
+        </div>
+      </div>
+
+      <!-- 9. OCR LOCAL -->
+      <div class="tool-panel" id="tool-ocr">
+        <div class="dropzone" id="ocr-dropzone" onclick="onSelectToolFile('ocr')">
+          <div class="dropzone-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg></div>
+          <h3>Selecciona el PDF escaneado para aplicar OCR</h3>
+          <p id="ocr-file-label">Reconocimiento de texto 100% offline con RapidOCR</p>
+          <button class="btn-browse" type="button">Seleccionar PDF</button>
+        </div>
+
+        <div class="card" id="ocr-card" style="display: none;">
+          <div class="file-pill">
+            <div class="file-pill-left">
+              <img id="ocr-thumb" class="thumbnail-preview" style="display: none;" src="" alt="preview">
+              <span class="file-badge badge-pdf">PDF</span>
+              <div>
+                <div class="file-name" id="ocr-name">documento.pdf</div>
+                <div class="file-size" id="ocr-size">0 KB</div>
+              </div>
+            </div>
+            <div style="display: flex; gap: 8px;">
+              <button class="btn-secondary" onclick="onSelectToolFile('ocr')">Cambiar</button>
+              <button class="btn-secondary btn-danger-pill" onclick="onClearToolFile('ocr')">✕ Quitar</button>
+            </div>
+          </div>
+
+          <div class="field-group" style="margin-bottom: 12px;">
+            <label class="field-label">Formato de salida OCR:</label>
+            <select id="ocr-format-select">
+              <option value="txt">Texto plano (.txt)</option>
+              <option value="docx">Documento Word (.docx)</option>
+              <option value="pdf">PDF con texto seleccionable (.pdf)</option>
+            </select>
+          </div>
+          <button class="btn-action-primary" id="ocr-btn" onclick="onExecuteOcr()">
+            🔍 Extraer Texto con OCR Offline
+          </button>
         </div>
       </div>
 
@@ -2143,7 +2199,8 @@
       try {
         const res = await window.pywebview.api.download_and_install_update(
           _pendingUpdateInfo.download_url,
-          _pendingUpdateInfo.filename
+          _pendingUpdateInfo.filename,
+          _pendingUpdateInfo.sha256sums_url || null
         );
         if (res && res.success) {
           if (confirmBtn) confirmBtn.textContent = 'Instalando y reiniciando...';
@@ -2162,10 +2219,65 @@
       }
     }
 
+    async function loadUserSettings() {
+      if (!window.pywebview?.api?.get_settings) return;
+      try {
+        const s = await window.pywebview.api.get_settings();
+        if (s && s.theme === 'light') {
+          document.body.classList.add('light-theme');
+          const lbl = document.getElementById('theme-label');
+          if (lbl) lbl.textContent = '☀️ Modo Claro';
+        }
+        if (s && s.default_output_dir && !chosenOutputFolder) {
+          chosenOutputFolder = s.default_output_dir;
+          const fBtn = document.getElementById('conv-folder-btn');
+          if (fBtn) fBtn.textContent = '📁 ' + s.default_output_dir;
+        }
+      } catch (e) {
+        console.warn('Settings load error:', e);
+      }
+    }
+
+    async function consumePendingIpcFiles() {
+      if (!window.pywebview?.api?.consume_pending_files) return;
+      try {
+        const files = await window.pywebview.api.consume_pending_files();
+        if (Array.isArray(files) && files.length > 0 && window.pywebview?.api?.load_file_from_path) {
+          const info = await window.pywebview.api.load_file_from_path(files[0]);
+          if (info && info.success) {
+            setLoadedConvertFile(info);
+            showToast(`Archivo recibido: ${info.filename || files[0]}`, 'info');
+          }
+        }
+      } catch (e) {
+        console.warn('IPC files error:', e);
+      }
+    }
+
+    window.onExternalFilesReceived = function() {
+      consumePendingIpcFiles();
+    };
+
+    async function onExportDiagnostics() {
+      if (!window.pywebview?.api?.export_diagnostic_report) return;
+      try {
+        const res = await window.pywebview.api.export_diagnostic_report(chosenOutputFolder);
+        if (res && res.success) {
+          showToast(`Reporte de diagnóstico guardado: ${res.filename}`, 'success');
+        } else {
+          showToast(`No se pudo exportar diagnóstico: ${(res && res.error_message) || 'Error'}`, 'error');
+        }
+      } catch (e) {
+        showToast(`Error exportando diagnóstico: ${e}`, 'error');
+      }
+    }
+
     function bootstrapApp() {
       if (_appBootstrapped || !window.pywebview?.api) return;
       _appBootstrapped = true;
+      loadUserSettings();
       checkInitialFile();
+      consumePendingIpcFiles();
       refreshHistoryUI();
       refreshAiStatusPill();
       setTimeout(() => checkAppUpdates(false), 1200);
@@ -2258,7 +2370,7 @@
       });
 
       // Individual PDF Tools Dropzones (Supports dropping on dropzone or card)
-      const pdfTools = ['split', 'compress', 'extract', 'rotate', 'watermark', 'sign', 'sec'];
+      const pdfTools = ['split', 'compress', 'extract', 'rotate', 'watermark', 'sign', 'sec', 'ocr'];
       pdfTools.forEach(tool => {
         ['dropzone', 'card'].forEach(type => {
           const elemId = `${tool}-${type}`;
@@ -2285,7 +2397,8 @@
         rotate: 'Rotar',
         watermark: 'Marca de Agua',
         sign: 'Firmar PDF',
-        sec: 'Seguridad'
+        sec: 'Seguridad',
+        ocr: 'OCR Local'
       };
       return names[tool] || tool;
     }
@@ -2572,25 +2685,51 @@
       }
     }
 
+    async function onCancelBatch() {
+      const cancelBtn = document.getElementById('batch-cancel-btn');
+      if (cancelBtn) {
+        cancelBtn.disabled = true;
+        cancelBtn.textContent = '⏳ Cancelando...';
+      }
+      try {
+        if (window.pywebview?.api?.cancel_current_task) {
+          await window.pywebview.api.cancel_current_task();
+        }
+      } catch (e) {
+        console.warn('Cancel error:', e);
+      }
+    }
+
     async function onStartBatchConversion() {
       if (!currentBatchFiles || currentBatchFiles.length === 0) return;
+      if (isAiOrBatchBusy) {
+        showToast(AI_ERROR_CATALOG.BUSY.message, 'warning');
+        return;
+      }
+
       const targetFmt = document.getElementById('batch-format-select').value;
       const btn = document.getElementById('batch-start-btn');
       const textSpan = document.getElementById('batch-btn-text');
+      const cancelBtn = document.getElementById('batch-cancel-btn');
       const progressWrap = document.getElementById('batch-progress-wrap');
       const progressFill = document.getElementById('batch-progress-fill');
       const progressPercent = document.getElementById('batch-progress-percent');
       const progressLabel = document.getElementById('batch-progress-label');
 
-      btn.disabled = true;
-      textSpan.innerHTML = '<div class="spinner"></div> Procesando lote...';
+      const opId = ++_activeAiOpId;
+      setAiOrBatchBusy(true, opId, btn, textSpan, 'Procesando en proceso aislado...');
+      if (cancelBtn) {
+        cancelBtn.style.display = 'inline-flex';
+        cancelBtn.disabled = false;
+        cancelBtn.textContent = '⏹ Cancelar lote';
+      }
       hideStatus('conv-status');
 
       if (progressWrap) {
         progressWrap.style.display = 'flex';
         progressFill.style.width = '0%';
         progressPercent.textContent = '0%';
-        progressLabel.textContent = `Iniciando conversión en paralelo (${currentBatchFiles.length} archivos)...`;
+        progressLabel.textContent = `Iniciando conversión (${currentBatchFiles.length} archivos)...`;
       }
 
       try {
@@ -2602,21 +2741,29 @@
         );
 
         lastResultPath = res.output_dir;
-        const batchMsg = `¡Lote completado! ${res.success_count} de ${res.total} convertidos exitosamente`;
+        let batchMsg = res.cancelled
+          ? `Lote cancelado. ${res.success_count} de ${res.total} completados antes de detener.`
+          : `¡Lote completado! ${res.success_count} de ${res.total} convertidos exitosamente`;
+        if (res.downscaled_count && res.downscaled_count > 0) {
+          batchMsg += ` (${res.downscaled_count} optimizadas a ≤2048 px)`;
+        }
         showStatus(
           'conv-status',
-          `✔ ${batchMsg} (${res.failed_count} errores)`,
-          res.failed_count === 0 ? 'success' : 'error'
+          `${res.cancelled ? '⚠' : '✔'} ${batchMsg} (${res.failed_count} errores)`,
+          res.failed_count === 0 && !res.cancelled ? 'success' : 'error'
         );
-        showToast(batchMsg, res.failed_count === 0 ? 'success' : 'warning');
+        showToast(batchMsg, res.cancelled ? 'warning' : (res.failed_count === 0 ? 'success' : 'warning'));
         triggerDesktopNotification('ArchiveConverter', batchMsg);
         refreshHistoryUI();
       } catch (err) {
         showStatus('conv-status', `✖ Error en conversión por lotes: ${err}`, 'error');
         showToast(`Error en conversión por lotes: ${err}`, 'error');
       } finally {
-        btn.disabled = false;
-        textSpan.textContent = '⚡ Iniciar Conversión por Lotes';
+        setAiOrBatchBusy(false, opId, btn, textSpan);
+        if (cancelBtn) {
+          cancelBtn.style.display = 'none';
+          cancelBtn.disabled = false;
+        }
         if (progressWrap) {
           setTimeout(() => { progressWrap.style.display = 'none'; }, 2000);
         }
@@ -2919,16 +3066,35 @@
         showToast('Por favor selecciona un archivo PDF para comprimir', 'warning');
         return;
       }
+      const mode = document.getElementById('compress-mode-select')?.value || 'balanced';
       const toolProgress = document.getElementById('tool-progress-wrap');
       if (toolProgress) toolProgress.style.display = 'flex';
 
       try {
-        const res = await window.pywebview.api.pdf_compress(file.path);
+        const res = await window.pywebview.api.pdf_compress(file.path, mode);
         if (res.success) {
           handleToolResult(res, `¡Comprimido! Reducción: ${res.reduction_percent}% (${res.old_size} -> ${res.new_size})`);
         } else {
           handleToolResult(res);
         }
+      } finally {
+        if (toolProgress) toolProgress.style.display = 'none';
+      }
+    }
+
+    async function onExecuteOcr() {
+      const file = toolSelectedFiles['ocr'];
+      if (!file) {
+        showToast('Por favor selecciona un archivo PDF para aplicar OCR', 'warning');
+        return;
+      }
+      const fmt = document.getElementById('ocr-format-select')?.value || 'txt';
+      const toolProgress = document.getElementById('tool-progress-wrap');
+      if (toolProgress) toolProgress.style.display = 'flex';
+
+      try {
+        const res = await window.pywebview.api.pdf_ocr(file.path, fmt);
+        handleToolResult(res, `¡OCR completado en formato ${fmt.toUpperCase()}!`);
       } finally {
         if (toolProgress) toolProgress.style.display = 'none';
       }

@@ -24,7 +24,7 @@ for pkg in ['tqdm', 'numpy', 'jsonschema']:
         pass
 
 # Recopilar recursos y modelos necesarios para las librerías
-for pkg in ['reportlab', 'pillow_heif', 'pymupdf', 'onnxruntime']:
+for pkg in ['reportlab', 'pillow_heif', 'pymupdf', 'onnxruntime', 'rapidocr_onnxruntime']:
     try:
         pkg_datas, pkg_binaries, pkg_hidden = collect_all(pkg)
         datas.extend(pkg_datas)
@@ -44,6 +44,7 @@ hiddenimports = [
     'PIL',
     'pillow_heif',
     'onnxruntime',
+    'rapidocr_onnxruntime',
     'reportlab',
     'pymupdf',
     'webview',

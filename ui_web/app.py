@@ -32,6 +32,19 @@ def run_modern_gui(initial_file: Optional[str] = None):
         background_color="#090D16"
     )
     api.set_window(window)
+
+    def _on_closed():
+        try:
+            from core.bg_remover import BackgroundRemover
+            BackgroundRemover.shutdown_worker()
+        except Exception:
+            pass
+
+    try:
+        window.events.closed += _on_closed
+    except Exception:
+        pass
+
     webview.start()
 
 

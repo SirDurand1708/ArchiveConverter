@@ -7,10 +7,26 @@ from typing import Optional
 
 
 def _launch_modern_gui(initial_file: Optional[str] = None) -> None:
-    """Inicia la interfaz gráfica web moderna con manejo controlado de errores."""
+    """Inicia la interfaz gráfica web moderna con instancia única y logging rotativo."""
+    instance_mgr = None
     try:
+        from core.single_instance import SingleInstanceManager
+        from core.diagnostics import init_logging, shutdown_logging
+        from ui_web.api import DesktopAPI
         from ui_web import run_modern_gui
+
+        instance_mgr = SingleInstanceManager()
+        forward_args = [initial_file] if initial_file else []
+        if not instance_mgr.acquire_or_forward(
+            forward_args,
+            on_files_received=DesktopAPI.enqueue_ipc_files,
+        ):
+            sys.exit(0)
+
+        init_logging(is_primary=True)
         run_modern_gui(initial_file=initial_file)
+    except SystemExit:
+        raise
     except Exception as exc:
         print(
             f"[ERROR CRÍTICO] No se pudo iniciar la interfaz gráfica de ArchiveConverter: {exc}",
@@ -18,6 +34,17 @@ def _launch_modern_gui(initial_file: Optional[str] = None) -> None:
         )
         traceback.print_exc(file=sys.stderr)
         sys.exit(1)
+    finally:
+        if instance_mgr is not None:
+            try:
+                instance_mgr.release()
+            except Exception:
+                pass
+        try:
+            from core.diagnostics import shutdown_logging
+            shutdown_logging()
+        except Exception:
+            pass
 
 
 def handle_conversion(args, manager):

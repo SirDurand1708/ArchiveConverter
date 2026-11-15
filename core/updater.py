@@ -1,3 +1,4 @@
+import hashlib
 import json
 import os
 import re
@@ -12,7 +13,7 @@ import zipfile
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional, Tuple
 
-APP_VERSION = "1.2.2"
+APP_VERSION = "1.3.0"
 GITHUB_RELEASES_API = "https://api.github.com/repos/SirDurand1708/ArchiveConverter/releases/latest"
 TEMP_FOLDER = Path(tempfile.gettempdir()) / "ArchiveConverter"
 
@@ -79,10 +80,12 @@ def check_for_updates(
     if not isinstance(assets, list) or not assets:
         return None
 
-    # Seleccionar el asset más adecuado (.zip portable o .exe)
+    # Seleccionar el asset más adecuado (.zip portable o Setup.exe) y SHA256SUMS.txt
     selected_asset = _select_best_asset(assets)
     if not selected_asset:
         return None
+
+    sha256sums_url = _find_sha256sums_url(assets)
 
     return {
         "update_available": True,
@@ -92,15 +95,108 @@ def check_for_updates(
         "download_url": selected_asset["browser_download_url"],
         "asset_name": selected_asset.get("name", "ArchiveConverter_update"),
         "asset_size": selected_asset.get("size", 0),
+        "sha256sums_url": sha256sums_url,
+        "installed_mode": is_installed_mode(),
         "release_notes": payload.get("body", ""),
         "html_url": payload.get("html_url", ""),
     }
 
 
-def _select_best_asset(assets: list[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+_INNO_UNINSTALL_KEY = r"Software\Microsoft\Windows\CurrentVersion\Uninstall\{5F7C7A28-D9E4-4284-9694-87A29E4C93B1}_is1"
+
+
+def is_installed_mode(exe_path: Optional[Path] = None) -> bool:
     """
-    Selecciona el asset de descarga más apropiado entre los archivos .zip y .exe
-    publicados en el Release de GitHub.
+    Detecta de forma exacta si la ejecución actual corresponde a una instalación de Inno Setup
+    comparando `InstallLocation` del registro contra la carpeta del ejecutable actual.
+    """
+    if sys.platform != "win32":
+        return False
+    try:
+        import winreg
+        current_dir = Path(exe_path or sys.executable).resolve().parent
+        for root in (winreg.HKEY_CURRENT_USER, winreg.HKEY_LOCAL_MACHINE):
+            try:
+                with winreg.OpenKey(root, _INNO_UNINSTALL_KEY) as key:
+                    val, _ = winreg.QueryValueEx(key, "InstallLocation")
+                    if val and Path(str(val)).resolve() == current_dir:
+                        return True
+            except OSError:
+                continue
+    except Exception:
+        pass
+    return False
+
+
+def _find_sha256sums_url(assets: list[Dict[str, Any]]) -> Optional[str]:
+    for asset in assets:
+        name = str(asset.get("name", "")).strip().lower()
+        url = asset.get("browser_download_url", "")
+        if name == "sha256sums.txt" and url:
+            return str(url)
+    return None
+
+
+def verify_release_sha256(
+    downloaded_file: Path,
+    sha256sums_url: Optional[str],
+    asset_name: Optional[str] = None,
+    timeout: int = 10,
+) -> bool:
+    """
+    Verificación fail-closed contra SHA256SUMS.txt del Release.
+    Devuelve True únicamente si SHA256SUMS.txt existe, contiene el hash del asset y coincide.
+    """
+    if not sha256sums_url or not downloaded_file.is_file():
+        return False
+
+    try:
+        req = urllib.request.Request(
+            sha256sums_url,
+            headers={"User-Agent": f"ArchiveConverter-Updater/{APP_VERSION}"},
+            method="GET",
+        )
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            if resp.status != 200:
+                return False
+            content = resp.read().decode("utf-8", errors="replace")
+    except Exception:
+        return False
+
+    target_name = (asset_name or downloaded_file.name).strip().lower()
+    expected_hash: Optional[str] = None
+    for line in content.splitlines():
+        clean = line.strip()
+        if not clean:
+            continue
+        m = re.match(r"^([0-9a-fA-F]{64})\s+\*?(.+)$", clean)
+        if not m:
+            continue
+        h_hex, fname = m.group(1).lower(), Path(m.group(2).strip()).name.lower()
+        if fname == target_name:
+            expected_hash = h_hex
+            break
+
+    if not expected_hash:
+        return False
+
+    digest = hashlib.sha256()
+    with open(downloaded_file, "rb") as f:
+        while True:
+            chunk = f.read(1024 * 1024)
+            if not chunk:
+                break
+            digest.update(chunk)
+
+    return digest.hexdigest().lower() == expected_hash
+
+
+def _select_best_asset(
+    assets: list[Dict[str, Any]],
+    installed: Optional[bool] = None,
+) -> Optional[Dict[str, Any]]:
+    """
+    Selecciona el asset de descarga apropiado según modo Instalado (*Setup*.exe) vs Portable (.zip).
     """
     zip_assets = []
     exe_assets = []
@@ -115,15 +211,22 @@ def _select_best_asset(assets: list[Dict[str, Any]]) -> Optional[Dict[str, Any]]
         elif name.endswith(".exe"):
             exe_assets.append(asset)
 
-    # Si es distribución portable empaquetada en carpeta (_internal o múltiples archivos),
-    # priorizar .zip; si no, priorizar .exe y luego .zip.
+    use_installed = is_installed_mode() if installed is None else installed
+    if use_installed:
+        setup_exes = [a for a in exe_assets if "setup" in str(a.get("name", "")).lower()]
+        if setup_exes:
+            return setup_exes[0]
+        if exe_assets:
+            return exe_assets[0]
+        if zip_assets:
+            return zip_assets[0]
+        return None
+
     is_onedir = getattr(sys, "frozen", False) and (Path(sys.executable).parent / "_internal").exists()
-    if is_onedir and zip_assets:
+    if (is_onedir or not use_installed) and zip_assets:
         return zip_assets[0]
     if exe_assets:
         return exe_assets[0]
-    if zip_assets:
-        return zip_assets[0]
     return None
 
 
@@ -239,12 +342,12 @@ def generate_update_script(
             '(goto) 2>nul & del "%~f0"\n'
         )
     elif "setup" in downloaded_file.name.lower() or "installer" in downloaded_file.name.lower():
-        # Instalador Inno Setup
+        # Instalador Inno Setup con cierre y reinicio controlado
         bat_content = (
             "@echo off\n"
             "chcp 65001 > nul\n"
             "timeout /t 2 /nobreak > nul\n"
-            f'start "" "{downloaded_file}" /SILENT\n'
+            f'start "" "{downloaded_file}" /SILENT /CLOSEAPPLICATIONS /RESTARTAPPLICATIONS\n'
             '(goto) 2>nul & del "%~f0"\n'
         )
     else:
@@ -274,6 +377,12 @@ def apply_update_and_restart(
     """
     exe_path = Path(target_exe) if target_exe else Path(sys.executable)
     bat_path = generate_update_script(downloaded_file=downloaded_file, target_exe=exe_path)
+
+    try:
+        from .single_instance import SingleInstanceManager
+        SingleInstanceManager.release_active()
+    except Exception:
+        pass
 
     creation_flags = 0
     if sys.platform == "win32":

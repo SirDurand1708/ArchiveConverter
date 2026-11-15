@@ -275,7 +275,11 @@ class TestStabilityAndConcurrency(unittest.TestCase):
             return original_executor(*args, **kwargs)
 
         with patch("concurrent.futures.ThreadPoolExecutor", side_effect=spy_executor):
-            with patch.object(BackgroundRemover, "remove_background", side_effect=lambda inp, out: out or inp):
+            with patch.object(
+                BackgroundRemover,
+                "remove_background_structured",
+                side_effect=lambda inp, output_path=None, **kw: {"ok": True, "output_path": str(output_path or inp), "downscaled": False},
+            ):
                 res = api.remove_batch_bg([str(self.sample_img), str(self.sample_img)], output_dir=str(self.output_dir))
 
         self.assertEqual(recorded_max_workers, [1])

@@ -23,10 +23,14 @@ from core import (
     PDFToolkit,
     BackgroundRemover,
     ImageConverter,
+    SettingsManager,
+    OCREngine,
+    export_diagnostic_report as _core_export_diagnostics,
     APP_VERSION,
     check_for_updates as _core_check_for_updates,
     download_update as _core_download_update,
     apply_update_and_restart as _core_apply_update,
+    verify_release_sha256 as _core_verify_release_sha256,
 )
 
 TEMP_FOLDER = Path(tempfile.gettempdir()) / "ArchiveConverter"
@@ -89,10 +93,72 @@ class DesktopAPI:
     await window.pywebview.api.method_name(...)
     """
 
+    _ipc_lock = threading.Lock()
+    _pending_ipc_files: List[str] = []
+    _active_api_instance: Optional["DesktopAPI"] = None
+
+    @classmethod
+    def enqueue_ipc_files(cls, files: List[str]) -> None:
+        """Encola archivos recibidos desde otra instancia vía Named Pipe y notifica a la UI."""
+        if not files:
+            return
+        with cls._ipc_lock:
+            for f in files:
+                if f and f not in cls._pending_ipc_files:
+                    cls._pending_ipc_files.append(f)
+            inst = cls._active_api_instance
+
+        if inst is not None:
+            try:
+                if inst._window is not None and hasattr(inst._window, "restore"):
+                    inst._window.restore()
+            except Exception:
+                pass
+            inst._safe_evaluate_js(
+                "if (window.onExternalFilesReceived) window.onExternalFilesReceived();"
+            )
+
     def __init__(self, initial_file: Optional[str] = None):
         self.manager = ConverterManager()
+        self.history: List[Dict[str, Any]] = []
         self._window: Optional[webview.Window] = None
         self.initial_file = initial_file
+        self._job_lock = threading.Lock()
+        self._job_tokens: Dict[str, threading.Event] = {}
+        self._current_job_id: Optional[str] = None
+        with DesktopAPI._ipc_lock:
+            DesktopAPI._active_api_instance = self
+
+    def consume_pending_files(self) -> List[str]:
+        """Drena la cola de archivos recibidos por IPC antes/durante bootstrapApp()."""
+        with DesktopAPI._ipc_lock:
+            files = list(DesktopAPI._pending_ipc_files)
+            DesktopAPI._pending_ipc_files.clear()
+        return files
+
+    def _create_job_token(self) -> tuple[str, threading.Event]:
+        job_id = uuid.uuid4().hex[:8]
+        ev = threading.Event()
+        with self._job_lock:
+            self._job_tokens[job_id] = ev
+            self._current_job_id = job_id
+        return job_id, ev
+
+    def _finish_job_token(self, job_id: str) -> None:
+        with self._job_lock:
+            self._job_tokens.pop(job_id, None)
+            if self._current_job_id == job_id:
+                self._current_job_id = None
+
+    def cancel_current_task(self, job_id: Optional[str] = None) -> Dict[str, Any]:
+        """Activa el token de cancelación cooperativa del lote o tarea en curso."""
+        with self._job_lock:
+            target_id = job_id or self._current_job_id
+            ev = self._job_tokens.get(target_id) if target_id else None
+            if ev is not None:
+                ev.set()
+                return {"ok": True, "cancelled": True, "job_id": target_id}
+        return {"ok": False, "cancelled": False, "job_id": None}
         self.history: List[Dict[str, Any]] = []
 
     def get_initial_file(self) -> Optional[Dict[str, Any]]:
@@ -443,6 +509,8 @@ class DesktopAPI:
         allocated_names_lock = threading.Lock()
         allocated_names: Set[str] = set()
         completed_count = 0
+        downscaled_count = 0
+        job_id, cancel_event = self._create_job_token()
 
         def get_unique_output_path(in_p: Path) -> Path:
             if is_heavy_ai:
@@ -465,7 +533,10 @@ class DesktopAPI:
                 return cand
 
         def process_single(p_str: str):
-            nonlocal completed_count
+            nonlocal completed_count, downscaled_count
+            if cancel_event.is_set():
+                return None, Path(p_str).name, "Cancelado", 0.0, None
+
             in_p = Path(p_str)
             out_target = get_unique_output_path(in_p)
 
@@ -473,7 +544,15 @@ class DesktopAPI:
                 t0 = time.perf_counter()
                 try:
                     with _AI_EXECUTION_LOCK:
-                        out_res = BackgroundRemover.remove_background(in_p, out_target)
+                        if cancel_event.is_set():
+                            return None, in_p.name, "Cancelado", 0.0, None
+                        ai_res = BackgroundRemover.remove_background_structured(in_p, output_path=out_target)
+                    if cancel_event.is_set():
+                        return None, in_p.name, "Cancelado", 0.0, None
+                    out_res = Path(ai_res["output_path"])
+                    if ai_res.get("downscaled"):
+                        with completed_lock:
+                            downscaled_count += 1
                     elapsed = round(time.perf_counter() - t0, 3)
                     ok, detail, out_path_str = True, out_res.name, str(out_res)
                 except Exception as err:
@@ -525,10 +604,15 @@ class DesktopAPI:
 
         # Restringir tareas pesadas de IA a ejecución estrictamente secuencial (1 a la vez)
         max_workers = 1 if is_heavy_ai else min(4, max(1, os.cpu_count() or 2))
-        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-            results = list(executor.map(process_single, file_paths))
+        try:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+                results = list(executor.map(process_single, file_paths))
+        finally:
+            self._finish_job_token(job_id)
 
         for ok, name, detail, elapsed, out_p in results:
+            if ok is None:
+                continue
             if ok:
                 success_list.append({"name": name, "output_name": detail, "elapsed": elapsed})
                 if out_p:
@@ -540,6 +624,9 @@ class DesktopAPI:
             "total": total,
             "success_count": len(success_list),
             "failed_count": len(failed_list),
+            "downscaled_count": downscaled_count,
+            "cancelled": cancel_event.is_set(),
+            "job_id": job_id,
             "output_dir": str(out_d),
             "success_list": success_list,
             "failed_list": failed_list,
@@ -684,24 +771,122 @@ class DesktopAPI:
         except Exception as e:
             return {"success": False, "error_message": str(e)}
 
-    def pdf_compress(self, file_path: str) -> Dict[str, Any]:
+    def pdf_compress(self, file_path: str, mode: str = "balanced") -> Dict[str, Any]:
+        job_id, cancel_event = self._create_job_token()
         try:
             in_p = Path(file_path)
             old_size = in_p.stat().st_size
-            res = PDFToolkit.compress(in_p)
+            res = PDFToolkit.compress(in_p, mode=mode, cancel_event=cancel_event)
             new_size = res.stat().st_size
             reduction = (1 - (new_size / old_size)) * 100 if old_size > 0 else 0
-            self._add_history(res.name, str(res), "Comprimir PDF")
+            self._add_history(res.name, str(res), f"Comprimir PDF ({mode})")
             return {
                 "success": True,
                 "output_path": str(res),
                 "filename": res.name,
                 "old_size": self._format_size(old_size),
                 "new_size": self._format_size(new_size),
-                "reduction_percent": round(reduction, 1)
+                "reduction_percent": round(reduction, 1),
             }
+        except InterruptedError as e:
+            return {"success": False, "cancelled": True, "error_message": str(e)}
         except Exception as e:
             return {"success": False, "error_message": str(e)}
+        finally:
+            self._finish_job_token(job_id)
+
+    def pdf_ocr(self, file_path: str, output_format: str = "txt", output_dir: Optional[str] = None) -> Dict[str, Any]:
+        job_id, cancel_event = self._create_job_token()
+        try:
+            in_p = Path(file_path)
+            out_target = None
+            if output_dir:
+                out_target = Path(output_dir) / f"{in_p.stem}_ocr.{output_format.lower().lstrip('.')}"
+            res = OCREngine.process_pdf(in_p, output_format=output_format, output_path=out_target, cancel_event=cancel_event)
+            self._add_history(res.name, str(res), f"OCR ({output_format.upper()})")
+            return {"success": True, "output_path": str(res), "filename": res.name}
+        except InterruptedError as e:
+            return {"success": False, "cancelled": True, "error_message": str(e)}
+        except Exception as e:
+            return {"success": False, "error_message": str(e)}
+        finally:
+            self._finish_job_token(job_id)
+
+    # ================= Preferencias, Carpetas y Diagnóstico =================
+
+    def get_settings(self) -> Dict[str, Any]:
+        return SettingsManager.load()
+
+    def save_settings(self, updates: Dict[str, Any]) -> Dict[str, Any]:
+        return SettingsManager.save(updates)
+
+    def export_diagnostic_report(self, output_dir: Optional[str] = None) -> Dict[str, Any]:
+        try:
+            out_path = Path(output_dir) / "ArchiveConverter_diagnostico.txt" if output_dir else None
+            res = _core_export_diagnostics(output_path=out_path, app_version=APP_VERSION)
+            return {"success": True, "output_path": str(res), "filename": res.name}
+        except Exception as e:
+            return {"success": False, "error_message": str(e)}
+
+    def expand_dropped_paths(
+        self,
+        paths: List[str],
+        recursive: bool = True,
+        max_files: int = 500,
+    ) -> List[str]:
+        """Expande carpetas de forma segura (ignora symlinks, Junction Points y archivos ocultos)."""
+        collected: List[str] = []
+        seen: Set[str] = set()
+        _FILE_ATTRIBUTE_REPARSE_POINT = 0x0400
+
+        def _is_reparse_or_hidden(p: Path) -> bool:
+            if p.name.startswith("."):
+                return True
+            try:
+                if p.is_symlink():
+                    return True
+                st = os.lstat(p)
+                attrs = getattr(st, "st_file_attributes", 0)
+                if attrs & _FILE_ATTRIBUTE_REPARSE_POINT:
+                    return True
+            except OSError:
+                return True
+            return False
+
+        for raw in paths or []:
+            if len(collected) >= max_files:
+                break
+            p = Path(raw)
+            if not p.exists() or _is_reparse_or_hidden(p):
+                continue
+            if p.is_file():
+                rp = str(p.resolve())
+                if rp not in seen:
+                    seen.add(rp)
+                    collected.append(rp)
+            elif p.is_dir():
+                if not recursive:
+                    for item in p.iterdir():
+                        if len(collected) >= max_files:
+                            break
+                        if item.is_file() and not _is_reparse_or_hidden(item):
+                            rp = str(item.resolve())
+                            if rp not in seen:
+                                seen.add(rp)
+                                collected.append(rp)
+                else:
+                    for root, dirs, files in os.walk(p, followlinks=False):
+                        dirs[:] = [d for d in dirs if not _is_reparse_or_hidden(Path(root) / d)]
+                        for fname in files:
+                            if len(collected) >= max_files:
+                                break
+                            fp = Path(root) / fname
+                            if not _is_reparse_or_hidden(fp):
+                                rp = str(fp.resolve())
+                                if rp not in seen:
+                                    seen.add(rp)
+                                    collected.append(rp)
+        return collected
 
     def pdf_extract_images(self, file_path: str) -> Dict[str, Any]:
         try:
@@ -802,10 +987,16 @@ class DesktopAPI:
             "current_version": APP_VERSION,
         }
 
-    def download_and_install_update(self, download_url: str, filename: Optional[str] = None) -> Dict[str, Any]:
+    def download_and_install_update(
+        self,
+        download_url: str,
+        filename: Optional[str] = None,
+        sha256sums_url: Optional[str] = None,
+    ) -> Dict[str, Any]:
         """
         Descarga el paquete de actualización en TEMP_FOLDER reportando progreso a la UI,
-        genera `update.bat`, lo lanza en segundo plano y cierra la app para reemplazar el binario.
+        verifica SHA256SUMS.txt (fail-closed cuando se proporciona), genera `update.bat`,
+        lo lanza en segundo plano y cierra la app.
         """
         last_emit = [0.0]
         last_pct = [-1.0]
@@ -832,6 +1023,17 @@ class DesktopAPI:
                 "success": False,
                 "error_message": "No se pudo descargar la actualización. Verifica tu conexión a internet."
             }
+
+        if sha256sums_url is not None:
+            if not _core_verify_release_sha256(downloaded_path, sha256sums_url, asset_name=filename):
+                try:
+                    downloaded_path.unlink(missing_ok=True)
+                except OSError:
+                    pass
+                return {
+                    "success": False,
+                    "error_message": "Verificación SHA-256 fallida contra SHA256SUMS.txt. Actualización abortada por seguridad."
+                }
 
         try:
             _core_apply_update(downloaded_file=downloaded_path, exit_app=True)
