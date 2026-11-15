@@ -26,16 +26,7 @@ jobs:
       id: meta
       shell: pwsh
       run: |
-        $pyScript = @'
-import json, re
-from pathlib import Path
-up = Path("core/updater.py").read_text(encoding="utf-8")
-bg = Path("core/bg_remover.py").read_text(encoding="utf-8")
-v = re.search(r'APP_VERSION\s*=\s*"([^"]+)"', up).group(1)
-h = re.search(r'U2NET_EXPECTED_SHA256\s*=\s*"([0-9a-fA-F]{64})"', bg).group(1)
-print(json.dumps({"version": v, "sha256": h.lower()}))
-'@
-        $metaJson = $pyScript | python -
+        $metaJson = 'import json, re; from pathlib import Path; up = Path("core/updater.py").read_text(encoding="utf-8"); bg = Path("core/bg_remover.py").read_text(encoding="utf-8"); v = re.search(r"APP_VERSION\s*=\s*\x22([^\x22]+)\x22", up).group(1); h = re.search(r"U2NET_EXPECTED_SHA256\s*=\s*\x22([0-9a-fA-F]{64})\x22", bg).group(1); print(json.dumps({"version": v, "sha256": h.lower()}))' | python -
         $meta = $metaJson | ConvertFrom-Json
         $appVersion = $meta.version
         $u2netSha = $meta.sha256
